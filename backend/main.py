@@ -94,11 +94,15 @@ def sanitize(obj):
     return obj
 
 
-def find_nearby_meters(lat: float, lon: float, radius_m: int = 400, limit: int = 20) -> list:
+def find_nearby_meters(lat: float, lon: float, radius_m: int = 400, limit: int = 20,
+                       dow: int = None, hour: int = None) -> list:
     """Find meters within radius, enriched with availability and citation risk."""
-    now = datetime.now()
-    dow = now.weekday()
-    hour = now.hour
+    if dow is None or hour is None:
+        now = datetime.now()
+        if dow is None:
+            dow = now.weekday()
+        if hour is None:
+            hour = now.hour
 
     results = []
     for meter in METERS:
@@ -185,6 +189,8 @@ class ParkingQuery(BaseModel):
     lat: float
     lon: float
     radius_m: Optional[int] = 400
+    dow: Optional[int] = None   # 0=Mon … 6=Sun; None = use server time
+    hour: Optional[int] = None  # 0-23; None = use server time
 
 
 class MeterDetailQuery(BaseModel):
@@ -259,10 +265,10 @@ def list_areas():
 async def find_parking(req: ParkingQuery):
     """Main endpoint: find best parking near a location with Claude recommendation."""
     now = datetime.now()
-    dow = now.weekday()
-    hour = now.hour
+    dow = req.dow if req.dow is not None else now.weekday()
+    hour = req.hour if req.hour is not None else now.hour
 
-    nearby = find_nearby_meters(req.lat, req.lon, req.radius_m)
+    nearby = find_nearby_meters(req.lat, req.lon, req.radius_m, dow=dow, hour=hour)
 
     if not nearby:
         raise HTTPException(status_code=404, detail="No meters found in that area")
@@ -296,6 +302,7 @@ def meter_curve(meter_id: str):
 
 
 @app.get("/meters/area")
-def meters_in_area(lat: float, lon: float, radius_m: int = 1000, limit: int = 400):
+def meters_in_area(lat: float, lon: float, radius_m: int = 1000, limit: int = 400,
+                   dow: Optional[int] = None, hour: Optional[int] = None):
     """Return all meters in an area (for map rendering without AI)."""
-    return find_nearby_meters(lat, lon, radius_m, limit=min(limit, 500))
+    return find_nearby_meters(lat, lon, radius_m, limit=min(limit, 500), dow=dow, hour=hour)

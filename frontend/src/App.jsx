@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-leaflet";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -53,6 +53,122 @@ const SAMPLE_RECOMMENDATION = `Your best bet is the meters on 5th Ave near Marke
 ⚠️ The Broadway corridor has moderate citation risk after 6pm — enforcement patrols regularly there.
 
 💡 Tip: Free 2-hour street parking opens up on Island Ave after 6pm, about a 4-minute walk south.`;
+
+// ── Location Search (Nominatim geocoder, bounded to San Diego) ─────────────────
+const SD_VIEWBOX = "-117.4,33.2,-116.9,32.53"; // west,north,east,south
+
+function LocationSearch({ onSelect, userLocation, onClear }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const debounceRef = useRef(null);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (query.length < 3) { setResults([]); return; }
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const params = new URLSearchParams({
+          format: "json", q: query, countrycodes: "us",
+          viewbox: SD_VIEWBOX, bounded: "0", limit: "5",
+        });
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
+          headers: { "User-Agent": "SDSmartPark/1.0" },
+        });
+        setResults(await res.json());
+      } catch { setResults([]); }
+      finally { setSearching(false); }
+    }, 400);
+    return () => clearTimeout(debounceRef.current);
+  }, [query]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setResults([]);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  if (userLocation) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{
+          flex: 1, fontSize: 11, color: "#93c5fd", padding: "7px 10px",
+          background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.25)",
+          borderRadius: 7, fontFamily: "monospace", overflow: "hidden",
+          textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          ◎ {userLocation.label}
+        </div>
+        <button
+          onClick={onClear}
+          style={{
+            fontSize: 11, padding: "7px 10px", background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.1)", borderRadius: 7,
+            color: "rgba(255,255,255,0.5)", cursor: "pointer", fontFamily: "inherit",
+          }}
+        >
+          ✕
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: "relative" }} ref={containerRef}>
+      <div style={{ position: "relative" }}>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search address or landmark…"
+          style={{
+            width: "100%", padding: "8px 36px 8px 12px",
+            background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: 7, color: "#e2e8f0", fontSize: 12,
+            fontFamily: "inherit", outline: "none", boxSizing: "border-box",
+          }}
+        />
+        <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "rgba(255,255,255,0.25)", pointerEvents: "none" }}>
+          {searching ? "…" : "⌕"}
+        </span>
+      </div>
+      {results.length > 0 && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 9999,
+          background: "rgba(8,15,24,0.98)", border: "1px solid rgba(255,255,255,0.12)",
+          borderRadius: 8, overflow: "hidden", boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+        }}>
+          {results.map((r, i) => {
+            const label = r.display_name.split(",").slice(0, 3).join(",").trim();
+            return (
+              <div
+                key={i}
+                onClick={() => {
+                  onSelect({ lat: parseFloat(r.lat), lon: parseFloat(r.lon), label: r.display_name.split(",").slice(0, 2).join(",").trim() });
+                  setQuery("");
+                  setResults([]);
+                }}
+                style={{
+                  padding: "10px 14px", fontSize: 11, color: "#e2e8f0",
+                  cursor: "pointer", borderBottom: i < results.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none",
+                  fontFamily: "monospace", lineHeight: 1.4,
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "rgba(59,130,246,0.15)"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              >
+                {label}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Markdown renderer ──────────────────────────────────────────────────────────
 function renderInline(text) {
@@ -113,18 +229,19 @@ function MarkdownText({ text }) {
 }
 
 // ── Map Components ─────────────────────────────────────────────────────────────
-function MapController({ centerLat, centerLon, selectedMeter }) {
+function MapController({ centerLat, centerLon, selectedMeter, userLocation }) {
   const map = useMap();
-  // Pan to neighborhood center when it changes
   useEffect(() => { map.setView([centerLat, centerLon], 15); }, [centerLat, centerLon]);
-  // Pan + zoom to selected meter when changed via list click
+  useEffect(() => {
+    if (userLocation) map.setView([userLocation.lat, userLocation.lon], 16);
+  }, [userLocation?.lat, userLocation?.lon]);
   useEffect(() => {
     if (selectedMeter) map.setView([selectedMeter.lat, selectedMeter.lon], 17);
   }, [selectedMeter?.meter_id]);
   return null;
 }
 
-function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter }) {
+function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter, userLocation }) {
   return (
     <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" }}>
       <MapContainer
@@ -140,7 +257,23 @@ function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter
           maxZoom={19}
         />
 
-        <MapController centerLat={centerLat} centerLon={centerLon} selectedMeter={selectedMeter} />
+        <MapController centerLat={centerLat} centerLon={centerLon} selectedMeter={selectedMeter} userLocation={userLocation} />
+
+        {/* User location pin */}
+        {userLocation && (
+          <CircleMarker
+            center={[userLocation.lat, userLocation.lon]}
+            radius={9}
+            fillColor="#3b82f6"
+            color="#ffffff"
+            weight={2.5}
+            fillOpacity={1}
+          >
+            <Tooltip permanent direction="top" offset={[0, -10]}>
+              <span style={{ fontSize: 10 }}>◎ {userLocation.label}</span>
+            </Tooltip>
+          </CircleMarker>
+        )}
 
         {meters.map((m) => {
           const color = availColor(m.availability);
@@ -158,13 +291,27 @@ function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter
               eventHandlers={{ click: () => onSelectMeter(m) }}
             >
               <Tooltip sticky>
-                <div style={{ fontFamily: "monospace", fontSize: 12, lineHeight: 1.6 }}>
-                  <strong>{m.street_address || m.meter_id}</strong><br />
-                  Zone: {m.zone || "—"} · {m.rate_range || "Rate unknown"}<br />
-                  Availability: <span style={{ color: availColor(m.availability) }}>{Math.round(m.availability * 100)}%</span>
-                  {" · "}{availLabel(m.availability)}<br />
-                  Citation risk: {risk.text}
-                  {m.distance_m != null && <><br />Distance: {m.distance_m}m</>}
+                <div style={{ fontSize: 12, lineHeight: 1.7, minWidth: 180 }}>
+                  <div style={{ fontWeight: 700, color: "#f1f5f9", marginBottom: 2 }}>
+                    {m.street_address || m.meter_id}
+                  </div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 6 }}>
+                    ID: {m.meter_id}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                    <span style={{ color: availColor(m.availability), fontWeight: 600 }}>
+                      {Math.round(m.availability * 100)}% · {availLabel(m.availability)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", lineHeight: 1.8 }}>
+                    {m.zone && <div>Zone: {m.zone}</div>}
+                    {m.rate_range && <div>Rate: {m.rate_range}</div>}
+                    {m.time_start && m.time_end && <div>Hours: {m.time_start}–{m.time_end}</div>}
+                    {m.time_limit && <div>Limit: {m.time_limit}</div>}
+                    {m.days_in_operation && <div>Days: {m.days_in_operation}</div>}
+                    <div style={{ color: risk.color }}>{risk.text}</div>
+                    {m.distance_m != null && <div>Distance: {m.distance_m}m</div>}
+                  </div>
                 </div>
               </Tooltip>
             </CircleMarker>
@@ -177,7 +324,6 @@ function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter
 
 // ── Shared hook: fetch availability curve for a meter ─────────────────────────
 function useAvailCurve(meterId) {
-  const todayDow = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
   const [byHour, setByHour] = useState(null); // { dow -> { hour -> avail } }
 
   useEffect(() => {
@@ -196,7 +342,7 @@ function useAvailCurve(meterId) {
       .catch(() => null);
   }, [meterId]);
 
-  return { byHour, todayDow };
+  return byHour;
 }
 
 function hourLabel(h) {
@@ -206,15 +352,14 @@ function hourLabel(h) {
 }
 
 // ── Compact sparkline for meter cards (full 24h, hoverable) ───────────────────
-function AvailSparkline({ meter }) {
+function AvailSparkline({ meter, selectedDow, selectedHour }) {
   const hours = Array.from({ length: 24 }, (_, i) => i); // 0–23
-  const nowHour = new Date().getHours();
-  const { byHour, todayDow } = useAvailCurve(meter.meter_id);
+  const byHour = useAvailCurve(meter.meter_id);
   const [hoverIdx, setHoverIdx] = useState(null);
 
-  const todayData = byHour?.[todayDow] ?? null;
+  const dayData = byHour?.[selectedDow] ?? null;
   const displayCurve = hours.map((h) =>
-    todayData ? (todayData[h] ?? meter.availability) : (() => {
+    dayData ? (dayData[h] ?? meter.availability) : (() => {
       const noise = Math.sin(h * 0.8 + meter.lat * 100) * 0.15;
       return Math.max(0.05, Math.min(0.95, meter.availability + noise));
     })()
@@ -225,7 +370,7 @@ function AvailSparkline({ meter }) {
   const yOf = (v) => H - v * H;
   const pts = displayCurve.map((v, i) => `${xOf(i)},${yOf(v)}`).join(" ");
   const color = availColor(meter.availability);
-  const nowX = xOf(nowHour);
+  const nowX = xOf(selectedHour);
 
   const hoverH = hoverIdx !== null ? hours[hoverIdx] : null;
   const hoverV = hoverIdx !== null ? displayCurve[hoverIdx] : null;
@@ -233,7 +378,7 @@ function AvailSparkline({ meter }) {
   return (
     <div style={{ marginTop: 8, position: "relative" }}>
       <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 4, fontFamily: "monospace" }}>
-        AVAILABILITY TODAY (24H)
+        {DOW_NAMES[selectedDow]} — AVAILABILITY (24H)
       </div>
       <svg
         width={W} height={H}
@@ -257,7 +402,7 @@ function AvailSparkline({ meter }) {
           fill={`url(#sg_${meter.meter_id})`}
         />
         <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} />
-        {/* Now line */}
+        {/* Selected hour line */}
         <line x1={nowX} y1={0} x2={nowX} y2={H} stroke="rgba(255,255,255,0.35)" strokeWidth={1} strokeDasharray="2,2" />
         {/* Hover */}
         {hoverIdx !== null && (
@@ -282,15 +427,14 @@ function AvailSparkline({ meter }) {
 }
 
 // ── Full availability chart for selected meter detail panel ───────────────────
-function AvailChart({ meter }) {
+function AvailChart({ meter, selectedDow, selectedHour }) {
   const hours = Array.from({ length: 24 }, (_, i) => i);
-  const nowHour = new Date().getHours();
-  const { byHour, todayDow } = useAvailCurve(meter.meter_id);
+  const byHour = useAvailCurve(meter.meter_id);
   const [hoverIdx, setHoverIdx] = useState(null);
 
-  const todayData = byHour?.[todayDow] ?? null;
+  const dayData = byHour?.[selectedDow] ?? null;
   const displayCurve = hours.map((h) =>
-    todayData ? (todayData[h] ?? meter.availability) : (() => {
+    dayData ? (dayData[h] ?? meter.availability) : (() => {
       const noise = Math.sin(h * 0.8 + meter.lat * 100) * 0.15;
       return Math.max(0.05, Math.min(0.95, meter.availability + noise));
     })()
@@ -313,7 +457,7 @@ function AvailChart({ meter }) {
   return (
     <div style={{ marginTop: 12 }}>
       <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 6, fontFamily: "monospace" }}>
-        AVAILABILITY TODAY (24H)
+        {DOW_NAMES[selectedDow]} — AVAILABILITY (24H)
       </div>
       <svg
         width="100%" viewBox={`0 0 ${W} ${H}`}
@@ -356,13 +500,13 @@ function AvailChart({ meter }) {
         {/* Line */}
         <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />
 
-        {/* Now line */}
+        {/* Selected hour line */}
         <line
-          x1={xOf(nowHour)} y1={PAD.top} x2={xOf(nowHour)} y2={PAD.top + innerH}
+          x1={xOf(selectedHour)} y1={PAD.top} x2={xOf(selectedHour)} y2={PAD.top + innerH}
           stroke="rgba(255,255,255,0.4)" strokeWidth={1} strokeDasharray="3,3"
         />
-        <text x={xOf(nowHour)} y={PAD.top - 3} textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize={8} fontFamily="monospace">
-          now
+        <text x={xOf(selectedHour)} y={PAD.top - 3} textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize={8} fontFamily="monospace">
+          {hourLabel(selectedHour)}
         </text>
 
         {/* Hover */}
@@ -402,7 +546,7 @@ function AvailChart({ meter }) {
 }
 
 // ── Meter Card ─────────────────────────────────────────────────────────────────
-function MeterCard({ meter, isSelected, onClick }) {
+function MeterCard({ meter, isSelected, onClick, selectedDow, selectedHour }) {
   const risk = riskLabel(meter.citation_risk);
   const avail = meter.availability;
 
@@ -423,6 +567,9 @@ function MeterCard({ meter, isSelected, onClick }) {
         <div>
           <div style={{ fontSize: 12, fontWeight: 600, color: "#e2e8f0", fontFamily: "monospace" }}>
             {meter.street_address || meter.meter_id}
+          </div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", marginTop: 1, fontFamily: "monospace" }}>
+            {meter.meter_id}
           </div>
           <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
             {meter.zone} · {meter.rate_range || "Rate unknown"} · {meter.distance_m}m walk
@@ -468,7 +615,7 @@ function MeterCard({ meter, isSelected, onClick }) {
         )}
       </div>
 
-      {isSelected && <AvailSparkline meter={meter} />}
+      {isSelected && <AvailSparkline meter={meter} selectedDow={selectedDow} selectedHour={selectedHour} />}
     </div>
   );
 }
@@ -491,6 +638,54 @@ export default function App() {
   const now = new Date();
   const timeStr = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   const dayStr = DOW_NAMES[now.getDay() === 0 ? 6 : now.getDay() - 1];
+  const nowDow = now.getDay() === 0 ? 6 : now.getDay() - 1;
+  const nowHour = now.getHours();
+
+  const [selectedDow, setSelectedDow] = useState(nowDow);
+  const [selectedHour, setSelectedHour] = useState(nowHour);
+  const isNow = selectedDow === nowDow && selectedHour === nowHour;
+
+  const [userLocation, setUserLocation] = useState(null); // { lat, lon, label }
+  // For Claude /find-parking: search near user pin if set, else area centroid
+  const activeLat = userLocation?.lat ?? selectedNeighborhood?.lat;
+  const activeLon = userLocation?.lon ?? selectedNeighborhood?.lon;
+
+  const handleLocationSelect = useCallback(async (loc) => {
+    setUserLocation(loc);
+
+    // Auto-select the nearest area by straight-line distance to centroid
+    if (areas.length > 0) {
+      const nearest = areas.reduce((best, a) => {
+        if (a.lat == null) return best;
+        const d = (a.lat - loc.lat) ** 2 + (a.lon - loc.lon) ** 2;
+        return !best || d < best.d ? { area: a, d } : best;
+      }, null)?.area;
+      if (nearest) setSelectedNeighborhood(nearest);
+    }
+
+    // Immediately show top-10 meters nearest to the user's location (no Claude needed)
+    try {
+      const res = await fetch(
+        `${API_BASE}/meters/area?lat=${loc.lat}&lon=${loc.lon}&radius_m=800&limit=10&dow=${selectedDow}&hour=${selectedHour}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setMeters(data);
+          setHasSearched(true);
+          setRecommendation("");
+          setUsingSampleData(false);
+        }
+      }
+    } catch { /* silently ignore */ }
+  }, [areas, selectedDow, selectedHour]);
+
+  const handleLocationClear = useCallback(() => {
+    setUserLocation(null);
+    setMeters([]);
+    setHasSearched(false);
+    setRecommendation("");
+  }, []);
 
   // Load areas from API on mount
   useEffect(() => {
@@ -505,16 +700,16 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Load all meters in the selected neighborhood whenever it changes
+  // Map meters always follow the selected area centroid (so area change always refreshes the map)
   useEffect(() => {
     if (!selectedNeighborhood) return;
     const { lat, lon } = selectedNeighborhood;
-    fetch(`${API_BASE}/meters/area?lat=${lat}&lon=${lon}&radius_m=1500&limit=500`)
+    fetch(`${API_BASE}/meters/area?lat=${lat}&lon=${lon}&radius_m=1500&limit=500&dow=${selectedDow}&hour=${selectedHour}`)
       .then((r) => r.ok ? r.json() : [])
       .then((data) => setMapMeters(Array.isArray(data) ? data : []))
       .catch(() => setMapMeters([]));
     setSelectedMeter(null);
-  }, [selectedNeighborhood]);
+  }, [selectedNeighborhood, selectedDow, selectedHour]);
 
   const handleSearch = useCallback(async () => {
     if (!query.trim()) return;
@@ -556,9 +751,11 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query,
-          lat: targetArea.lat,
-          lon: targetArea.lon,
+          lat: userLocation?.lat ?? targetArea.lat,
+          lon: userLocation?.lon ?? targetArea.lon,
           radius_m: 500,
+          dow: selectedDow,
+          hour: selectedHour,
         }),
       });
 
@@ -576,7 +773,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [query, selectedNeighborhood]);
+  }, [query, selectedNeighborhood, userLocation]);
 
   // Selecting a meter — unified handler for both list and map clicks
   const handleSelectMeter = useCallback((m) => {
@@ -652,6 +849,23 @@ export default function App() {
           display: "flex", flexDirection: "column", gap: 16,
           overflowY: "auto",
         }}>
+          {/* Location Search — top of panel */}
+          <div>
+            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 8, letterSpacing: "0.08em" }}>
+              YOUR LOCATION
+            </div>
+            <LocationSearch
+              userLocation={userLocation}
+              onSelect={handleLocationSelect}
+              onClear={handleLocationClear}
+            />
+            {!userLocation && (
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", marginTop: 6, fontFamily: "monospace" }}>
+                Search an address to see nearest meters · area used as default
+              </div>
+            )}
+          </div>
+
           {/* Area Selector */}
           <div>
             <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 8, letterSpacing: "0.08em", display: "flex", justifyContent: "space-between" }}>
@@ -680,6 +894,50 @@ export default function App() {
                   <span style={{ marginLeft: 4, fontSize: 8, opacity: 0.5 }}>{n.count}</span>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Day & Time Picker */}
+          <div>
+            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 8, letterSpacing: "0.08em", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>DAY & TIME</span>
+              {!isNow && (
+                <button
+                  onClick={() => { setSelectedDow(nowDow); setSelectedHour(nowHour); }}
+                  style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.3)", color: "#93c5fd", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  ↩ now
+                </button>
+              )}
+            </div>
+            {/* DOW buttons */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
+              {DOW_NAMES.map((d, i) => (
+                <button
+                  key={d}
+                  onClick={() => setSelectedDow(i)}
+                  style={{
+                    flex: 1, fontSize: 9, padding: "4px 2px", borderRadius: 5,
+                    background: selectedDow === i ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${selectedDow === i ? "rgba(59,130,246,0.6)" : "rgba(255,255,255,0.08)"}`,
+                    color: selectedDow === i ? "#93c5fd" : "rgba(255,255,255,0.4)",
+                    cursor: "pointer", fontFamily: "inherit",
+                  }}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+            {/* Hour slider */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <input
+                type="range" min={0} max={23} value={selectedHour}
+                onChange={(e) => setSelectedHour(Number(e.target.value))}
+                style={{ flex: 1, accentColor: "#3b82f6", cursor: "pointer" }}
+              />
+              <span style={{ fontSize: 12, fontFamily: "monospace", color: "#e2e8f0", minWidth: 36, textAlign: "right" }}>
+                {hourLabel(selectedHour)}
+              </span>
             </div>
           </div>
 
@@ -813,6 +1071,8 @@ export default function App() {
                     meter={m}
                     isSelected={selectedMeter?.meter_id === m.meter_id}
                     onClick={() => handleSelectMeter(m)}
+                    selectedDow={selectedDow}
+                    selectedHour={selectedHour}
                   />
                 ))}
               </div>
@@ -850,6 +1110,7 @@ export default function App() {
               centerLon={selectedNeighborhood.lon}
               onSelectMeter={handleSelectMeter}
               selectedMeter={selectedMeter}
+              userLocation={userLocation}
             />
 
               {/* Stats row — shown after search */}
@@ -905,9 +1166,16 @@ export default function App() {
                       <div style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>
                         {selectedMeter.street_address || selectedMeter.meter_id}
                       </div>
-                      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
-                        Zone: {selectedMeter.zone || "—"} · {selectedMeter.rate_range || "Rate unknown"}
-                        {selectedMeter.distance_m != null && ` · ${selectedMeter.distance_m}m away`}
+                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", marginTop: 1, fontFamily: "monospace" }}>
+                        {selectedMeter.meter_id}
+                      </div>
+                      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 4, lineHeight: 1.7 }}>
+                        {selectedMeter.zone && <div>Zone: {selectedMeter.zone}</div>}
+                        {selectedMeter.rate_range && <div>Rate: {selectedMeter.rate_range}</div>}
+                        {selectedMeter.time_start && selectedMeter.time_end && <div>Hours: {selectedMeter.time_start}–{selectedMeter.time_end}</div>}
+                        {selectedMeter.time_limit && <div>Limit: {selectedMeter.time_limit}</div>}
+                        {selectedMeter.days_in_operation && <div>Days: {selectedMeter.days_in_operation}</div>}
+                        {selectedMeter.distance_m != null && <div>{selectedMeter.distance_m}m away</div>}
                       </div>
                       <div style={{ fontSize: 11, color: riskLabel(selectedMeter.citation_risk).color, marginTop: 4 }}>
                         {riskLabel(selectedMeter.citation_risk).text}
@@ -922,7 +1190,7 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  <AvailChart meter={selectedMeter} />
+                  <AvailChart meter={selectedMeter} selectedDow={selectedDow} selectedHour={selectedHour} />
                 </div>
               )}
           </>}
