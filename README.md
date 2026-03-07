@@ -39,39 +39,24 @@ Frontend (React)  →  FastAPI Backend  →  Claude API
 - [Poetry](https://python-poetry.org/docs/#installation)
 - Node.js 18+
 
-### 1. Install Python dependencies
+### 1. Data Preprocessing
 
 ```bash
+# Install deps and create .venv in project root
 poetry install
-```
 
-This creates a `.venv` in the project root and installs all Python dependencies.
-
-### 2. Set your Anthropic API key
-
-```bash
-cp .env.example .env
-# Edit .env and replace `your_key_here` with your actual key
-```
-
-### 3. Preprocess the data (~5–10 min, run once)
-
-```bash
+# Preprocess data (run once — detects local CSV in data/ automatically)
 poetry run python scripts/preprocess.py
 ```
 
-This downloads from `data.sandiego.gov` and writes 3 files to `data/`:
-- `meter_locations.json` — ~5,000 meters with lat/lon and zone info
-- `availability_scores.json` — per-meter availability by day-of-week + hour
-- `citation_hotspots.json` — citation density grid cells
-
-### 4. Start the backend
-
+### 2. Backend (Python)
 ```bash
+# Start backend
+cp .env.example .env  # then fill in your Anthropic API key
 poetry run uvicorn backend.main:app --reload --port 8000
 ```
 
-### 5. Start the frontend
+### 2. Frontend (npm, separate)
 
 ```bash
 cd frontend
@@ -80,6 +65,17 @@ npm run dev
 ```
 
 Open http://localhost:5173
+
+---
+
+### Notes on preprocessing
+
+`preprocess.py` checks for `data/meter_temporal_occupancy.csv` first. If found and valid, it builds `meter_locations.json` and `availability_scores.json` locally — no downloads needed. Citation hotspots are always fetched from the SODA API.
+
+If the local CSV is not present, all data is downloaded from `data.sandiego.gov`:
+- `meter_locations.json` — ~3,800 active meters with lat/lon and zone info
+- `availability_scores.json` — per-meter availability by day-of-week + hour
+- `citation_hotspots.json` — citation density grid cells
 
 ---
 
