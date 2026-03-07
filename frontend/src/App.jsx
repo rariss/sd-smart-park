@@ -427,6 +427,8 @@ export default function App() {
   const [selectedMeter, setSelectedMeter] = useState(null);
   const [usingSampleData, setUsingSampleData] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [resolvedLocation, setResolvedLocation] = useState(null); // { area, reasoning }
+  const selectedAreaRef = useCallback((node) => { if (node) node.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [selectedNeighborhood]);
 
   const now = new Date();
   const timeStr = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
@@ -457,10 +459,38 @@ export default function App() {
   }, [selectedNeighborhood]);
 
   const handleSearch = useCallback(async () => {
-    if (!query.trim() || !selectedNeighborhood) return;
+    if (!query.trim()) return;
     setLoading(true);
     setHasSearched(true);
     setSelectedMeter(null);
+    setResolvedLocation(null);
+
+    // Resolve location from natural language query
+    let targetArea = selectedNeighborhood;
+    try {
+      const locRes = await fetch(`${API_BASE}/resolve-location`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      if (locRes.ok) {
+        const locData = await locRes.json();
+        if (locData.area) {
+          targetArea = locData.area;
+          setResolvedLocation(locData);
+          // Match against the areas array so the selector button highlights correctly
+          const matched = areas.find((a) => a.name === locData.area.name) || locData.area;
+          setSelectedNeighborhood(matched);
+        }
+      }
+    } catch {
+      // If resolve fails, fall through to use selectedNeighborhood
+    }
+
+    if (!targetArea) {
+      setLoading(false);
+      return;
+    }
 
     try {
       const res = await fetch(`${API_BASE}/find-parking`, {
@@ -468,8 +498,8 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query,
-          lat: selectedNeighborhood.lat,
-          lon: selectedNeighborhood.lon,
+          lat: targetArea.lat,
+          lon: targetArea.lon,
           radius_m: 500,
         }),
       });
@@ -481,7 +511,7 @@ export default function App() {
       setUsingSampleData(false);
     } catch {
       // Fall back to sample data for demo
-      const sampleMeters = generateSampleMeters(selectedNeighborhood.lat, selectedNeighborhood.lon);
+      const sampleMeters = generateSampleMeters(targetArea.lat, targetArea.lon);
       setMeters(sampleMeters);
       setRecommendation(SAMPLE_RECOMMENDATION);
       setUsingSampleData(true);
@@ -574,6 +604,7 @@ export default function App() {
               {areas.map((n) => (
                 <button
                   key={n.name}
+                  ref={selectedNeighborhood?.name === n.name ? selectedAreaRef : null}
                   onClick={() => setSelectedNeighborhood(n)}
                   style={{
                     fontSize: 10, padding: "4px 10px", borderRadius: 6,
@@ -649,6 +680,30 @@ export default function App() {
                 </button>
               ))}
             </div>
+
+            {/* Resolved location badge */}
+            {resolvedLocation && (
+              <div style={{
+                marginTop: 8, padding: "6px 10px",
+                background: "rgba(16,185,129,0.08)",
+                border: "1px solid rgba(16,185,129,0.25)",
+                borderRadius: 6,
+                display: "flex", alignItems: "center", gap: 6,
+              }}>
+                <span style={{ fontSize: 10, color: "#34d399" }}>⌖</span>
+                <span style={{ fontSize: 10, color: "#34d399", fontWeight: 600 }}>
+                  {resolvedLocation.location_name || resolvedLocation.area.name}
+                </span>
+                {resolvedLocation.location_name && (
+                  <span style={{ fontSize: 9, color: "rgba(255,255,255,0.45)" }}>
+                    → nearest area: {resolvedLocation.area.name}
+                  </span>
+                )}
+                <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", flex: 1 }}>
+                  — {resolvedLocation.reasoning}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* AI Recommendation */}
