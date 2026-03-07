@@ -197,18 +197,19 @@ class LocationQuery(BaseModel):
 
 @app.post("/resolve-location")
 async def resolve_location(req: LocationQuery):
-    """Use Claude to parse a natural language query into the closest known area."""
-    area_list = "\n".join(f"- {a['name']}" for a in AREAS)
-    prompt = f"""You are a San Diego parking assistant. The user said: "{req.query}"
+    """Use Claude to extract destination coordinates, then find the nearest area by distance."""
+    prompt = f"""The user is looking for parking in San Diego. They said: "{req.query}"
 
-Available parking areas in our database:
-{area_list}
-
-Extract the location intent from the user's query and match it to the single closest area from the list above.
+Extract the specific destination they're heading to and provide its approximate coordinates.
 Respond with ONLY valid JSON, no extra text:
-{{"area": "<exact area name from list>", "reasoning": "<one sentence>"}}
+{{"location_name": "<place or landmark name>", "lat": <latitude>, "lon": <longitude>, "reasoning": "<one sentence>"}}
 
-If no specific location is mentioned, pick the most relevant downtown area based on context clues (e.g. "game tonight" → area near Petco Park, "Little Italy dinner" → Little Italy)."""
+Examples:
+- "Padres game tonight" → Petco Park → lat 32.7073, lon -117.1566
+- "Dinner in Little Italy" → Little Italy, SD → lat 32.7249, lon -117.1699
+- "Balboa Park museum" → Balboa Park → lat 32.7341, lon -117.1446
+
+If no specific location is mentioned, default to downtown San Diego: lat 32.7157, lon -117.1611."""
 
     try:
         message = client.messages.create(
@@ -216,16 +217,31 @@ If no specific location is mentioned, pick the most relevant downtown area based
             max_tokens=120,
             messages=[{"role": "user", "content": prompt}]
         )
-        result = json.loads(message.content[0].text)
-        area_name = result.get("area", "")
-        matched = next((a for a in AREAS if a["name"] == area_name), None)
-        if matched:
-            return {"area": matched, "reasoning": result.get("reasoning", "")}
-    except Exception:
-        pass
+        raw = message.content[0].text.strip()
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        result = json.loads(raw.strip())
+        target_lat = result.get("lat")
+        target_lon = result.get("lon")
 
-    # Fallback to first area
-    return {"area": AREAS[0], "reasoning": "Could not parse location, using default area"}
+        if target_lat and target_lon:
+            # Find nearest area centroid by actual distance
+            nearest = min(
+                (a for a in AREAS if a.get("lat") and a.get("lon")),
+                key=lambda a: haversine(target_lat, target_lon, a["lat"], a["lon"])
+            )
+            return {
+                "area": nearest,
+                "location_name": result.get("location_name", ""),
+                "reasoning": result.get("reasoning", ""),
+            }
+    except Exception as e:
+        print(f"resolve-location error: {e} | raw: {message.content[0].text if message else 'no response'}")
+
+    return {"area": AREAS[0], "location_name": "", "reasoning": "Could not parse location, using default area"}
 
 
 @app.get("/health")

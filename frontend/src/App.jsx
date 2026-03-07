@@ -428,6 +428,7 @@ export default function App() {
   const [usingSampleData, setUsingSampleData] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [resolvedLocation, setResolvedLocation] = useState(null); // { area, reasoning }
+  const selectedAreaRef = useCallback((node) => { if (node) node.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [selectedNeighborhood]);
 
   const now = new Date();
   const timeStr = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
@@ -477,7 +478,9 @@ export default function App() {
         if (locData.area) {
           targetArea = locData.area;
           setResolvedLocation(locData);
-          setSelectedNeighborhood(locData.area);
+          // Match against the areas array so the selector button highlights correctly
+          const matched = areas.find((a) => a.name === locData.area.name) || locData.area;
+          setSelectedNeighborhood(matched);
         }
       }
     } catch {
@@ -601,6 +604,7 @@ export default function App() {
               {areas.map((n) => (
                 <button
                   key={n.name}
+                  ref={selectedNeighborhood?.name === n.name ? selectedAreaRef : null}
                   onClick={() => setSelectedNeighborhood(n)}
                   style={{
                     fontSize: 10, padding: "4px 10px", borderRadius: 6,
@@ -688,8 +692,13 @@ export default function App() {
               }}>
                 <span style={{ fontSize: 10, color: "#34d399" }}>⌖</span>
                 <span style={{ fontSize: 10, color: "#34d399", fontWeight: 600 }}>
-                  {resolvedLocation.area.name}
+                  {resolvedLocation.location_name || resolvedLocation.area.name}
                 </span>
+                {resolvedLocation.location_name && (
+                  <span style={{ fontSize: 9, color: "rgba(255,255,255,0.45)" }}>
+                    → nearest area: {resolvedLocation.area.name}
+                  </span>
+                )}
                 <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", flex: 1 }}>
                   — {resolvedLocation.reasoning}
                 </span>
