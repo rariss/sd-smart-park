@@ -1,16 +1,29 @@
 # 🅿️ SD Smart Park
 ### Claude AI × City of San Diego Open Data Hackathon
 
-> **Find the best parking in San Diego** — using 7+ years of historical meter transaction data to predict availability, combined with citation hotspot analysis and Claude AI recommendations.
+---
+
+## Team
+
+**Team Name:** SD Smart Park
+
+| Name | Role |
+|---|---|
+| Rami Ariss | Project Lead |
+| Kevin Kakkary | Senior Vibe Coder |
+| Christian Miramontes | Junior Vibe Analyst |
+
+---
+
+## Problem Statement
+
+Parking in San Diego is a daily frustration — drivers circle blocks wasting time and fuel, often getting ticketed in high-enforcement zones they weren't aware of. The City of San Diego publishes years of parking meter transaction and citation data, but it's raw and inaccessible to the average resident. There's no tool that turns this public data into actionable parking guidance. SD Smart Park solves this by combining historical occupancy patterns with citation risk analysis and surfacing it through a natural language AI interface anyone can use.
 
 ---
 
 ## What It Does
 
-You tell it where you're going and when. It tells you:
-- Which nearby meters are **historically most available** at that time
-- **Citation risk** zones to avoid
-- A **Claude-powered plain-English recommendation** with reasoning
+SD Smart Park lets you describe where you're going in plain English — *"Padres game tonight"* or *"dinner in Little Italy"* — and instantly shows which nearby parking meters are historically most available at that time, which zones carry high citation risk, and a Claude-powered recommendation with specific reasoning. The app uses 7+ years of City of San Diego meter transaction data to model per-meter availability by day-of-week and hour, overlaid on an interactive map with color-coded availability indicators.
 
 ---
 
@@ -143,6 +156,6 @@ GET /health
 
 ---
 
-## Team
+## Hackathon
 
 Built at the Claude Community × City of San Diego Hackathon 2025
