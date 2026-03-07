@@ -23,7 +23,7 @@ Parking in San Diego is a daily frustration — drivers circle blocks wasting ti
 
 ## What It Does
 
-SD Smart Park lets you describe where you're going in plain English — *"Padres game tonight"* or *"dinner in Little Italy"* — and instantly shows which nearby parking meters are historically most available at that time, which zones carry high citation risk, and a Claude-powered recommendation with specific reasoning. The app uses 7+ years of City of San Diego meter transaction data to model per-meter availability by day-of-week and hour, overlaid on an interactive map with color-coded availability indicators.
+SD Smart Park lets you describe where you're going in plain English — *"Padres game tonight"* or *"dinner in Little Italy"* — and instantly shows which nearby parking meters are historically most available at that time, which zones carry high citation risk, and a Claude-powered recommendation with specific reasoning. The app uses City of San Diego meter transaction data to model per-meter availability by day-of-week and hour, overlaid on an interactive map with color-coded availability indicators.
 
 ---
 
