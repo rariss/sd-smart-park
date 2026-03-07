@@ -191,6 +191,43 @@ class MeterDetailQuery(BaseModel):
     meter_id: str
 
 
+class LocationQuery(BaseModel):
+    query: str
+
+
+@app.post("/resolve-location")
+async def resolve_location(req: LocationQuery):
+    """Use Claude to parse a natural language query into the closest known area."""
+    area_list = "\n".join(f"- {a['name']}" for a in AREAS)
+    prompt = f"""You are a San Diego parking assistant. The user said: "{req.query}"
+
+Available parking areas in our database:
+{area_list}
+
+Extract the location intent from the user's query and match it to the single closest area from the list above.
+Respond with ONLY valid JSON, no extra text:
+{{"area": "<exact area name from list>", "reasoning": "<one sentence>"}}
+
+If no specific location is mentioned, pick the most relevant downtown area based on context clues (e.g. "game tonight" → area near Petco Park, "Little Italy dinner" → Little Italy)."""
+
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=120,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        result = json.loads(message.content[0].text)
+        area_name = result.get("area", "")
+        matched = next((a for a in AREAS if a["name"] == area_name), None)
+        if matched:
+            return {"area": matched, "reasoning": result.get("reasoning", "")}
+    except Exception:
+        pass
+
+    # Fallback to first area
+    return {"area": AREAS[0], "reasoning": "Could not parse location, using default area"}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "meters_loaded": len(METERS)}
@@ -218,7 +255,7 @@ async def find_parking(req: ParkingQuery):
     prompt = build_claude_prompt(req.query, nearby, dow, hour)
     try:
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}]
         )
