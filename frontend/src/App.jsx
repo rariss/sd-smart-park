@@ -54,6 +54,64 @@ const SAMPLE_RECOMMENDATION = `Your best bet is the meters on 5th Ave near Marke
 
 💡 Tip: Free 2-hour street parking opens up on Island Ave after 6pm, about a 4-minute walk south.`;
 
+// ── Markdown renderer ──────────────────────────────────────────────────────────
+function renderInline(text) {
+  // Handle **bold**
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) =>
+    part.startsWith("**") && part.endsWith("**")
+      ? <strong key={i} style={{ color: "#e2e8f0", fontWeight: 600 }}>{part.slice(2, -2)}</strong>
+      : part
+  );
+}
+
+function MarkdownText({ text }) {
+  if (!text) return null;
+  const lines = text.split("\n");
+  const elements = [];
+  let listItems = [];
+
+  const flushList = () => {
+    if (listItems.length > 0) {
+      elements.push(
+        <ul key={`ul-${elements.length}`} style={{ margin: "6px 0", paddingLeft: 18 }}>
+          {listItems.map((item, i) => (
+            <li key={i} style={{ marginBottom: 3, color: "rgba(255,255,255,0.75)", lineHeight: 1.6 }}>
+              {renderInline(item)}
+            </li>
+          ))}
+        </ul>
+      );
+      listItems = [];
+    }
+  };
+
+  lines.forEach((line, i) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushList();
+      return;
+    }
+    if (trimmed.startsWith("### ")) {
+      flushList();
+      elements.push(<div key={i} style={{ fontSize: 11, fontWeight: 700, color: "#93c5fd", marginTop: 10, marginBottom: 3, letterSpacing: "0.04em" }}>{renderInline(trimmed.slice(4))}</div>);
+    } else if (trimmed.startsWith("## ")) {
+      flushList();
+      elements.push(<div key={i} style={{ fontSize: 12, fontWeight: 700, color: "#60a5fa", marginTop: 10, marginBottom: 3 }}>{renderInline(trimmed.slice(3))}</div>);
+    } else if (trimmed.startsWith("# ")) {
+      flushList();
+      elements.push(<div key={i} style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0", marginTop: 10, marginBottom: 4 }}>{renderInline(trimmed.slice(2))}</div>);
+    } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      listItems.push(trimmed.slice(2));
+    } else {
+      flushList();
+      elements.push(<p key={i} style={{ margin: "4px 0", color: "rgba(255,255,255,0.75)", lineHeight: 1.6 }}>{renderInline(trimmed)}</p>);
+    }
+  });
+  flushList();
+  return <div>{elements}</div>;
+}
+
 // ── Map Components ─────────────────────────────────────────────────────────────
 function MapController({ centerLat, centerLon, selectedMeter }) {
   const map = useMap();
@@ -720,12 +778,8 @@ export default function App() {
               }}>
                 ✦ CLAUDE RECOMMENDATION
               </div>
-              <div style={{
-                fontSize: 12, lineHeight: 1.6,
-                color: "rgba(255,255,255,0.75)",
-                whiteSpace: "pre-line",
-              }}>
-                {recommendation}
+              <div style={{ fontSize: 12 }}>
+                <MarkdownText text={recommendation} />
               </div>
               {usingSampleData && (
                 <div style={{
