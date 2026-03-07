@@ -11,6 +11,7 @@ export default defineConfig({
       "/meters": "http://localhost:8000",
       "/meter": "http://localhost:8000",
       "/health": "http://localhost:8000",
+      "/resolve-location": "http://localhost:8000",
     },
   },
 });
