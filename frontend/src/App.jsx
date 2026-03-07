@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-leaflet";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const API_BASE = "";
@@ -17,17 +18,6 @@ const SD_NEIGHBORHOODS = [
 
 const DOW_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-// ── Utility ────────────────────────────────────────────────────────────────────
-function haversine(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const toRad = (d) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
 
 function availColor(score) {
   if (score >= 0.65) return "#22c55e";
@@ -77,104 +67,53 @@ const SAMPLE_RECOMMENDATION = `Your best bet is the meters on 5th Ave near Marke
 💡 Tip: Free 2-hour street parking opens up on Island Ave after 6pm, about a 4-minute walk south.`;
 
 // ── Mini Map Component (SVG-based, no external deps) ─────────────────────────
-function MiniMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter }) {
-  const svgRef = useRef(null);
-  const W = 520, H = 380;
-  const PAD = 40;
+// Recenter map when neighborhood changes without remounting
+function MapRecenter({ lat, lon }) {
+  const map = useMap();
+  useEffect(() => { map.setView([lat, lon]); }, [lat, lon]);
+  return null;
+}
 
-  if (!meters.length) return null;
-
-  const lats = meters.map((m) => m.lat);
-  const lons = meters.map((m) => m.lon);
-  const minLat = Math.min(...lats, centerLat) - 0.0005;
-  const maxLat = Math.max(...lats, centerLat) + 0.0005;
-  const minLon = Math.min(...lons, centerLon) - 0.0005;
-  const maxLon = Math.max(...lons, centerLon) + 0.0005;
-
-  const project = (lat, lon) => ({
-    x: PAD + ((lon - minLon) / (maxLon - minLon)) * (W - PAD * 2),
-    y: PAD + ((maxLat - lat) / (maxLat - minLat)) * (H - PAD * 2),
-  });
-
-  const center = project(centerLat, centerLon);
-
+function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter }) {
   return (
-    <svg
-      ref={svgRef}
-      width={W}
-      height={H}
-      style={{
-        background: "#0f1923",
-        borderRadius: "12px",
-        border: "1px solid rgba(255,255,255,0.08)",
-        cursor: "default",
-        width: "100%",
-        height: "auto",
-      }}
-    >
-      {/* Grid lines */}
-      {[0.2, 0.4, 0.6, 0.8].map((t) => (
-        <g key={t}>
-          <line
-            x1={PAD + t * (W - PAD * 2)} y1={PAD}
-            x2={PAD + t * (W - PAD * 2)} y2={H - PAD}
-            stroke="rgba(255,255,255,0.04)" strokeWidth={1}
-          />
-          <line
-            x1={PAD} y1={PAD + t * (H - PAD * 2)}
-            x2={W - PAD} y2={PAD + t * (H - PAD * 2)}
-            stroke="rgba(255,255,255,0.04)" strokeWidth={1}
-          />
-        </g>
-      ))}
+    <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" }}>
+      <MapContainer
+        center={[centerLat, centerLon]}
+        zoom={15}
+        style={{ height: 380, width: "100%" }}
+        zoomControl={true}
+      >
+        {/* CartoDB Dark Matter — free, no API key */}
+        <TileLayer
+          url="https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+          maxZoom={19}
+        />
 
-      {/* Meters */}
-      {meters.map((m) => {
-        const pt = project(m.lat, m.lon);
-        const color = availColor(m.availability);
-        const isSelected = selectedMeter?.meter_id === m.meter_id;
-        return (
-          <g key={m.meter_id} onClick={() => onSelectMeter(m)} style={{ cursor: "pointer" }}>
-            {isSelected && (
-              <circle cx={pt.x} cy={pt.y} r={14} fill="none" stroke={color} strokeWidth={2} opacity={0.5} />
-            )}
-            <circle
-              cx={pt.x} cy={pt.y} r={isSelected ? 7 : 5}
-              fill={color}
-              opacity={0.9}
-              stroke={isSelected ? "#fff" : "none"}
-              strokeWidth={1.5}
-            />
-          </g>
-        );
-      })}
+        <MapRecenter lat={centerLat} lon={centerLon} />
 
-      {/* Center marker (destination) */}
-      <g>
-        <circle cx={center.x} cy={center.y} r={10} fill="none" stroke="#60a5fa" strokeWidth={2} />
-        <circle cx={center.x} cy={center.y} r={4} fill="#60a5fa" />
-        <circle cx={center.x} cy={center.y} r={16} fill="none" stroke="#60a5fa" strokeWidth={1} opacity={0.3} />
-      </g>
-
-      {/* Legend */}
-      {[
-        { color: "#22c55e", label: "Available" },
-        { color: "#f59e0b", label: "Moderate" },
-        { color: "#ef4444", label: "Full" },
-      ].map(({ color, label }, i) => (
-        <g key={label} transform={`translate(${PAD + i * 110}, ${H - 18})`}>
-          <circle cx={6} cy={0} r={4} fill={color} />
-          <text x={14} y={4} fill="rgba(255,255,255,0.5)" fontSize={10} fontFamily="monospace">
-            {label}
-          </text>
-        </g>
-      ))}
-
-      {/* Destination label */}
-      <text x={center.x} y={center.y - 18} textAnchor="middle" fill="#60a5fa" fontSize={10} fontFamily="monospace">
-        DESTINATION
-      </text>
-    </svg>
+        {meters.map((m) => {
+          const color = availColor(m.availability);
+          const isSelected = selectedMeter?.meter_id === m.meter_id;
+          return (
+            <CircleMarker
+              key={m.meter_id}
+              center={[m.lat, m.lon]}
+              radius={isSelected ? 10 : 6}
+              fillColor={color}
+              color={isSelected ? "#fff" : color}
+              weight={isSelected ? 2 : 1}
+              fillOpacity={0.9}
+              eventHandlers={{ click: () => onSelectMeter(m) }}
+            >
+              <Tooltip>
+                {m.street_address || m.meter_id} — {Math.round(m.availability * 100)}% available
+              </Tooltip>
+            </CircleMarker>
+          );
+        })}
+      </MapContainer>
+    </div>
   );
 }
 
@@ -610,7 +549,7 @@ export default function App() {
             </div>
           ) : (
             <>
-              <MiniMap
+              <ParkingMap
                 meters={meters}
                 centerLat={selectedNeighborhood.lat}
                 centerLon={selectedNeighborhood.lon}
