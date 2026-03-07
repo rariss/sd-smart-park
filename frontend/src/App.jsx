@@ -1,33 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-leaflet";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const API_BASE = "http://localhost:8000";
-
-// San Diego neighborhoods with coordinates
-const SD_NEIGHBORHOODS = [
-  { name: "Gaslamp Quarter", lat: 32.7099, lon: -117.1607 },
-  { name: "Little Italy", lat: 32.7241, lon: -117.1697 },
-  { name: "Balboa Park", lat: 32.7341, lon: -117.1446 },
-  { name: "Hillcrest", lat: 32.7467, lon: -117.1614 },
-  { name: "Pacific Beach", lat: 32.7966, lon: -117.2359 },
-  { name: "Ocean Beach", lat: 32.7446, lon: -117.2498 },
-  { name: "North Park", lat: 32.7472, lon: -117.1299 },
-  { name: "Mission Valley", lat: 32.7676, lon: -117.1508 },
-];
+const API_BASE = "";
 
 const DOW_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-// ── Utility ────────────────────────────────────────────────────────────────────
-function haversine(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const toRad = (d) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
 
 function availColor(score) {
   if (score >= 0.65) return "#22c55e";
@@ -76,160 +54,290 @@ const SAMPLE_RECOMMENDATION = `Your best bet is the meters on 5th Ave near Marke
 
 💡 Tip: Free 2-hour street parking opens up on Island Ave after 6pm, about a 4-minute walk south.`;
 
-// ── Mini Map Component (SVG-based, no external deps) ─────────────────────────
-function MiniMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter }) {
-  const svgRef = useRef(null);
-  const W = 520, H = 380;
-  const PAD = 40;
+// ── Map Components ─────────────────────────────────────────────────────────────
+function MapController({ centerLat, centerLon, selectedMeter }) {
+  const map = useMap();
+  // Pan to neighborhood center when it changes
+  useEffect(() => { map.setView([centerLat, centerLon], 15); }, [centerLat, centerLon]);
+  // Pan + zoom to selected meter when changed via list click
+  useEffect(() => {
+    if (selectedMeter) map.setView([selectedMeter.lat, selectedMeter.lon], 17);
+  }, [selectedMeter?.meter_id]);
+  return null;
+}
 
-  if (!meters.length) return null;
-
-  const lats = meters.map((m) => m.lat);
-  const lons = meters.map((m) => m.lon);
-  const minLat = Math.min(...lats, centerLat) - 0.0005;
-  const maxLat = Math.max(...lats, centerLat) + 0.0005;
-  const minLon = Math.min(...lons, centerLon) - 0.0005;
-  const maxLon = Math.max(...lons, centerLon) + 0.0005;
-
-  const project = (lat, lon) => ({
-    x: PAD + ((lon - minLon) / (maxLon - minLon)) * (W - PAD * 2),
-    y: PAD + ((maxLat - lat) / (maxLat - minLat)) * (H - PAD * 2),
-  });
-
-  const center = project(centerLat, centerLon);
-
+function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter }) {
   return (
-    <svg
-      ref={svgRef}
-      width={W}
-      height={H}
-      style={{
-        background: "#0f1923",
-        borderRadius: "12px",
-        border: "1px solid rgba(255,255,255,0.08)",
-        cursor: "default",
-        width: "100%",
-        height: "auto",
-      }}
-    >
-      {/* Grid lines */}
-      {[0.2, 0.4, 0.6, 0.8].map((t) => (
-        <g key={t}>
-          <line
-            x1={PAD + t * (W - PAD * 2)} y1={PAD}
-            x2={PAD + t * (W - PAD * 2)} y2={H - PAD}
-            stroke="rgba(255,255,255,0.04)" strokeWidth={1}
-          />
-          <line
-            x1={PAD} y1={PAD + t * (H - PAD * 2)}
-            x2={W - PAD} y2={PAD + t * (H - PAD * 2)}
-            stroke="rgba(255,255,255,0.04)" strokeWidth={1}
-          />
-        </g>
-      ))}
+    <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" }}>
+      <MapContainer
+        center={[centerLat, centerLon]}
+        zoom={15}
+        style={{ height: 380, width: "100%" }}
+        zoomControl={true}
+      >
+        {/* CartoDB Dark Matter — free, no API key */}
+        <TileLayer
+          url="https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+          maxZoom={19}
+        />
 
-      {/* Meters */}
-      {meters.map((m) => {
-        const pt = project(m.lat, m.lon);
-        const color = availColor(m.availability);
-        const isSelected = selectedMeter?.meter_id === m.meter_id;
-        return (
-          <g key={m.meter_id} onClick={() => onSelectMeter(m)} style={{ cursor: "pointer" }}>
-            {isSelected && (
-              <circle cx={pt.x} cy={pt.y} r={14} fill="none" stroke={color} strokeWidth={2} opacity={0.5} />
-            )}
-            <circle
-              cx={pt.x} cy={pt.y} r={isSelected ? 7 : 5}
-              fill={color}
-              opacity={0.9}
-              stroke={isSelected ? "#fff" : "none"}
-              strokeWidth={1.5}
-            />
-          </g>
-        );
-      })}
+        <MapController centerLat={centerLat} centerLon={centerLon} selectedMeter={selectedMeter} />
 
-      {/* Center marker (destination) */}
-      <g>
-        <circle cx={center.x} cy={center.y} r={10} fill="none" stroke="#60a5fa" strokeWidth={2} />
-        <circle cx={center.x} cy={center.y} r={4} fill="#60a5fa" />
-        <circle cx={center.x} cy={center.y} r={16} fill="none" stroke="#60a5fa" strokeWidth={1} opacity={0.3} />
-      </g>
-
-      {/* Legend */}
-      {[
-        { color: "#22c55e", label: "Available" },
-        { color: "#f59e0b", label: "Moderate" },
-        { color: "#ef4444", label: "Full" },
-      ].map(({ color, label }, i) => (
-        <g key={label} transform={`translate(${PAD + i * 110}, ${H - 18})`}>
-          <circle cx={6} cy={0} r={4} fill={color} />
-          <text x={14} y={4} fill="rgba(255,255,255,0.5)" fontSize={10} fontFamily="monospace">
-            {label}
-          </text>
-        </g>
-      ))}
-
-      {/* Destination label */}
-      <text x={center.x} y={center.y - 18} textAnchor="middle" fill="#60a5fa" fontSize={10} fontFamily="monospace">
-        DESTINATION
-      </text>
-    </svg>
+        {meters.map((m) => {
+          const color = availColor(m.availability);
+          const isSelected = selectedMeter?.meter_id === m.meter_id;
+          const risk = riskLabel(m.citation_risk);
+          return (
+            <CircleMarker
+              key={m.meter_id}
+              center={[m.lat, m.lon]}
+              radius={isSelected ? 10 : 6}
+              fillColor={color}
+              color={isSelected ? "#fff" : color}
+              weight={isSelected ? 2 : 1}
+              fillOpacity={0.9}
+              eventHandlers={{ click: () => onSelectMeter(m) }}
+            >
+              <Tooltip sticky>
+                <div style={{ fontFamily: "monospace", fontSize: 12, lineHeight: 1.6 }}>
+                  <strong>{m.street_address || m.meter_id}</strong><br />
+                  Zone: {m.zone || "—"} · {m.rate_range || "Rate unknown"}<br />
+                  Availability: <span style={{ color: availColor(m.availability) }}>{Math.round(m.availability * 100)}%</span>
+                  {" · "}{availLabel(m.availability)}<br />
+                  Citation risk: {risk.text}
+                  {m.distance_m != null && <><br />Distance: {m.distance_m}m</>}
+                </div>
+              </Tooltip>
+            </CircleMarker>
+          );
+        })}
+      </MapContainer>
+    </div>
   );
 }
 
-// ── Availability Sparkline ─────────────────────────────────────────────────────
+// ── Shared hook: fetch availability curve for a meter ─────────────────────────
+function useAvailCurve(meterId) {
+  const todayDow = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
+  const [byHour, setByHour] = useState(null); // { dow -> { hour -> avail } }
+
+  useEffect(() => {
+    setByHour(null);
+    fetch(`${API_BASE}/meter/${meterId}/curve`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (!data) return;
+        const map = {};
+        for (const e of data.curve) {
+          if (!map[e.dow]) map[e.dow] = {};
+          map[e.dow][e.hour] = e.avail;
+        }
+        setByHour(map);
+      })
+      .catch(() => null);
+  }, [meterId]);
+
+  return { byHour, todayDow };
+}
+
+function hourLabel(h) {
+  if (h === 0) return "12a";
+  if (h === 12) return "12p";
+  return h < 12 ? `${h}a` : `${h - 12}p`;
+}
+
+// ── Compact sparkline for meter cards (full 24h, hoverable) ───────────────────
 function AvailSparkline({ meter }) {
-  const hours = Array.from({ length: 17 }, (_, i) => i + 6); // 6am-10pm
-  const now = new Date().getHours();
+  const hours = Array.from({ length: 24 }, (_, i) => i); // 0–23
+  const nowHour = new Date().getHours();
+  const { byHour, todayDow } = useAvailCurve(meter.meter_id);
+  const [hoverIdx, setHoverIdx] = useState(null);
 
-  // Mock curve based on meter availability (real app would fetch /meter/:id/curve)
-  const curve = hours.map((h) => {
-    const base = meter.availability;
-    const noise = Math.sin(h * 0.8 + meter.lat * 100) * 0.15;
-    return Math.max(0.05, Math.min(0.95, base + noise));
-  });
+  const todayData = byHour?.[todayDow] ?? null;
+  const displayCurve = hours.map((h) =>
+    todayData ? (todayData[h] ?? meter.availability) : (() => {
+      const noise = Math.sin(h * 0.8 + meter.lat * 100) * 0.15;
+      return Math.max(0.05, Math.min(0.95, meter.availability + noise));
+    })()
+  );
 
-  const W = 200, H = 40;
-  const pts = curve.map((v, i) => {
-    const x = (i / (curve.length - 1)) * W;
-    const y = H - v * H;
-    return `${x},${y}`;
-  });
+  const W = 200, H = 36;
+  const xOf = (i) => (i / (hours.length - 1)) * W;
+  const yOf = (v) => H - v * H;
+  const pts = displayCurve.map((v, i) => `${xOf(i)},${yOf(v)}`).join(" ");
+  const color = availColor(meter.availability);
+  const nowX = xOf(nowHour);
 
-  const nowIdx = hours.indexOf(now);
-  const nowX = nowIdx >= 0 ? (nowIdx / (curve.length - 1)) * W : null;
+  const hoverH = hoverIdx !== null ? hours[hoverIdx] : null;
+  const hoverV = hoverIdx !== null ? displayCurve[hoverIdx] : null;
 
   return (
-    <div style={{ marginTop: 8 }}>
+    <div style={{ marginTop: 8, position: "relative" }}>
       <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 4, fontFamily: "monospace" }}>
-        AVAILABILITY TODAY (6AM–10PM)
+        AVAILABILITY TODAY (24H)
       </div>
-      <svg width={W} height={H} style={{ overflow: "visible" }}>
+      <svg
+        width={W} height={H}
+        style={{ overflow: "visible", cursor: "crosshair", display: "block" }}
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const idx = Math.round((x / W) * (hours.length - 1));
+          setHoverIdx(Math.max(0, Math.min(hours.length - 1, idx)));
+        }}
+        onMouseLeave={() => setHoverIdx(null)}
+      >
         <defs>
-          <linearGradient id={`grad_${meter.meter_id}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={availColor(meter.availability)} stopOpacity={0.3} />
-            <stop offset="100%" stopColor={availColor(meter.availability)} stopOpacity={0} />
+          <linearGradient id={`sg_${meter.meter_id}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+            <stop offset="100%" stopColor={color} stopOpacity={0} />
           </linearGradient>
         </defs>
-        <polyline
-          points={pts.join(" ")}
-          fill="none"
-          stroke={availColor(meter.availability)}
-          strokeWidth={1.5}
+        <polygon
+          points={`0,${H} ${pts} ${W},${H}`}
+          fill={`url(#sg_${meter.meter_id})`}
         />
-        {nowX !== null && (
-          <line x1={nowX} y1={0} x2={nowX} y2={H} stroke="rgba(255,255,255,0.4)" strokeWidth={1} strokeDasharray="2,2" />
-        )}
-        {hours.filter((h) => h % 3 === 0).map((h) => {
-          const i = hours.indexOf(h);
-          const x = (i / (curve.length - 1)) * W;
-          return (
-            <text key={h} x={x} y={H + 12} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize={8} fontFamily="monospace">
-              {h > 12 ? `${h - 12}p` : `${h}a`}
+        <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} />
+        {/* Now line */}
+        <line x1={nowX} y1={0} x2={nowX} y2={H} stroke="rgba(255,255,255,0.35)" strokeWidth={1} strokeDasharray="2,2" />
+        {/* Hover */}
+        {hoverIdx !== null && (
+          <>
+            <line x1={xOf(hoverIdx)} y1={0} x2={xOf(hoverIdx)} y2={H} stroke="rgba(255,255,255,0.5)" strokeWidth={1} />
+            <circle cx={xOf(hoverIdx)} cy={yOf(hoverV)} r={3} fill={color} />
+            <rect x={Math.min(xOf(hoverIdx) + 4, W - 64)} y={yOf(hoverV) - 18} width={60} height={16} rx={3} fill="rgba(15,23,42,0.9)" />
+            <text x={Math.min(xOf(hoverIdx) + 7, W - 61)} y={yOf(hoverV) - 6} fill="#e2e8f0" fontSize={9} fontFamily="monospace">
+              {hourLabel(hoverH)} · {Math.round(hoverV * 100)}%
             </text>
-          );
-        })}
+          </>
+        )}
+        {/* X axis labels every 6h */}
+        {[0, 6, 12, 18, 23].map((h) => (
+          <text key={h} x={xOf(h)} y={H + 11} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize={8} fontFamily="monospace">
+            {hourLabel(h)}
+          </text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+// ── Full availability chart for selected meter detail panel ───────────────────
+function AvailChart({ meter }) {
+  const hours = Array.from({ length: 24 }, (_, i) => i);
+  const nowHour = new Date().getHours();
+  const { byHour, todayDow } = useAvailCurve(meter.meter_id);
+  const [hoverIdx, setHoverIdx] = useState(null);
+
+  const todayData = byHour?.[todayDow] ?? null;
+  const displayCurve = hours.map((h) =>
+    todayData ? (todayData[h] ?? meter.availability) : (() => {
+      const noise = Math.sin(h * 0.8 + meter.lat * 100) * 0.15;
+      return Math.max(0.05, Math.min(0.95, meter.availability + noise));
+    })()
+  );
+
+  const PAD = { top: 12, right: 8, bottom: 28, left: 36 };
+  const W = 420, H = 130;
+  const innerW = W - PAD.left - PAD.right;
+  const innerH = H - PAD.top - PAD.bottom;
+
+  const xOf = (i) => PAD.left + (i / (hours.length - 1)) * innerW;
+  const yOf = (v) => PAD.top + (1 - v) * innerH;
+
+  const pts = displayCurve.map((v, i) => `${xOf(i)},${yOf(v)}`).join(" ");
+  const color = availColor(meter.availability);
+  const yTicks = [0, 0.25, 0.5, 0.75, 1.0];
+
+  const hoverV = hoverIdx !== null ? displayCurve[hoverIdx] : null;
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 6, fontFamily: "monospace" }}>
+        AVAILABILITY TODAY (24H)
+      </div>
+      <svg
+        width="100%" viewBox={`0 0 ${W} ${H}`}
+        style={{ overflow: "visible", cursor: "crosshair" }}
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const scaleX = W / rect.width;
+          const x = (e.clientX - rect.left) * scaleX - PAD.left;
+          const idx = Math.round((x / innerW) * (hours.length - 1));
+          setHoverIdx(Math.max(0, Math.min(hours.length - 1, idx)));
+        }}
+        onMouseLeave={() => setHoverIdx(null)}
+      >
+        <defs>
+          <linearGradient id={`cg_${meter.meter_id}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.3} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+
+        {/* Y-axis grid + labels */}
+        {yTicks.map((v) => (
+          <g key={v}>
+            <line
+              x1={PAD.left} y1={yOf(v)} x2={PAD.left + innerW} y2={yOf(v)}
+              stroke="rgba(255,255,255,0.07)" strokeWidth={1}
+            />
+            <text x={PAD.left - 4} y={yOf(v) + 4} textAnchor="end" fill="rgba(255,255,255,0.35)" fontSize={9} fontFamily="monospace">
+              {Math.round(v * 100)}%
+            </text>
+          </g>
+        ))}
+
+        {/* Area fill */}
+        <polygon
+          points={`${xOf(0)},${yOf(0)} ${pts} ${xOf(hours.length - 1)},${yOf(0)}`}
+          fill={`url(#cg_${meter.meter_id})`}
+        />
+
+        {/* Line */}
+        <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />
+
+        {/* Now line */}
+        <line
+          x1={xOf(nowHour)} y1={PAD.top} x2={xOf(nowHour)} y2={PAD.top + innerH}
+          stroke="rgba(255,255,255,0.4)" strokeWidth={1} strokeDasharray="3,3"
+        />
+        <text x={xOf(nowHour)} y={PAD.top - 3} textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize={8} fontFamily="monospace">
+          now
+        </text>
+
+        {/* Hover */}
+        {hoverIdx !== null && (
+          <>
+            <line
+              x1={xOf(hoverIdx)} y1={PAD.top} x2={xOf(hoverIdx)} y2={PAD.top + innerH}
+              stroke="rgba(255,255,255,0.45)" strokeWidth={1}
+            />
+            <circle cx={xOf(hoverIdx)} cy={yOf(hoverV)} r={4} fill={color} stroke="#080f18" strokeWidth={1.5} />
+            <rect
+              x={Math.min(xOf(hoverIdx) + 6, PAD.left + innerW - 74)} y={yOf(hoverV) - 20}
+              width={70} height={18} rx={4} fill="rgba(15,23,42,0.95)"
+            />
+            <text
+              x={Math.min(xOf(hoverIdx) + 9, PAD.left + innerW - 71)} y={yOf(hoverV) - 7}
+              fill="#e2e8f0" fontSize={10} fontFamily="monospace"
+            >
+              {hourLabel(hours[hoverIdx])} · {Math.round(hoverV * 100)}%
+            </text>
+          </>
+        )}
+
+        {/* X axis labels every 6h */}
+        {[0, 6, 12, 18, 23].map((h) => (
+          <text key={h} x={xOf(h)} y={PAD.top + innerH + 14} textAnchor="middle" fill="rgba(255,255,255,0.35)" fontSize={9} fontFamily="monospace">
+            {hourLabel(h)}
+          </text>
+        ))}
+
+        {/* Y axis border */}
+        <line x1={PAD.left} y1={PAD.top} x2={PAD.left} y2={PAD.top + innerH} stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
+        <line x1={PAD.left} y1={PAD.top + innerH} x2={PAD.left + innerW} y2={PAD.top + innerH} stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
       </svg>
     </div>
   );
@@ -276,7 +384,7 @@ function MeterCard({ meter, isSelected, onClick }) {
         </div>
       </div>
 
-      <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{
           fontSize: 9, padding: "2px 7px", borderRadius: 4,
           background: "rgba(255,255,255,0.05)",
@@ -285,6 +393,21 @@ function MeterCard({ meter, isSelected, onClick }) {
         }}>
           {risk.text}
         </span>
+        {meter.time_start && meter.time_end && (
+          <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.45)", border: "1px solid rgba(255,255,255,0.08)", fontFamily: "monospace" }}>
+            {meter.time_start}–{meter.time_end}
+          </span>
+        )}
+        {meter.time_limit && (
+          <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.45)", border: "1px solid rgba(255,255,255,0.08)", fontFamily: "monospace" }}>
+            {meter.time_limit}
+          </span>
+        )}
+        {meter.days_in_operation && (
+          <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.45)", border: "1px solid rgba(255,255,255,0.08)", fontFamily: "monospace" }}>
+            {meter.days_in_operation}
+          </span>
+        )}
       </div>
 
       {isSelected && <AvailSparkline meter={meter} />}
@@ -295,8 +418,10 @@ function MeterCard({ meter, isSelected, onClick }) {
 // ── Main App ───────────────────────────────────────────────────────────────────
 export default function App() {
   const [query, setQuery] = useState("");
-  const [selectedNeighborhood, setSelectedNeighborhood] = useState(SD_NEIGHBORHOODS[0]);
-  const [meters, setMeters] = useState([]);
+  const [areas, setAreas] = useState([]);
+  const [selectedNeighborhood, setSelectedNeighborhood] = useState(null);
+  const [meters, setMeters] = useState([]);       // search results for left panel
+  const [mapMeters, setMapMeters] = useState([]); // all area meters for map
   const [recommendation, setRecommendation] = useState("");
   const [loading, setLoading] = useState(false);
   const [selectedMeter, setSelectedMeter] = useState(null);
@@ -307,8 +432,32 @@ export default function App() {
   const timeStr = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   const dayStr = DOW_NAMES[now.getDay() === 0 ? 6 : now.getDay() - 1];
 
+  // Load areas from API on mount
+  useEffect(() => {
+    fetch(`${API_BASE}/areas`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setAreas(data);
+          setSelectedNeighborhood(data[0]);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Load all meters in the selected neighborhood whenever it changes
+  useEffect(() => {
+    if (!selectedNeighborhood) return;
+    const { lat, lon } = selectedNeighborhood;
+    fetch(`${API_BASE}/meters/area?lat=${lat}&lon=${lon}&radius_m=1500&limit=500`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => setMapMeters(Array.isArray(data) ? data : []))
+      .catch(() => setMapMeters([]));
+    setSelectedMeter(null);
+  }, [selectedNeighborhood]);
+
   const handleSearch = useCallback(async () => {
-    if (!query.trim()) return;
+    if (!query.trim() || !selectedNeighborhood) return;
     setLoading(true);
     setHasSearched(true);
     setSelectedMeter(null);
@@ -340,6 +489,11 @@ export default function App() {
       setLoading(false);
     }
   }, [query, selectedNeighborhood]);
+
+  // Selecting a meter — unified handler for both list and map clicks
+  const handleSelectMeter = useCallback((m) => {
+    setSelectedMeter((prev) => prev?.meter_id === m.meter_id ? null : m);
+  }, []);
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter") handleSearch();
@@ -380,7 +534,7 @@ export default function App() {
           }}>🅿️</div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.05em", color: "#f1f5f9" }}>
-              SD SMART PARKING
+              SD SMART PARK
             </div>
             <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 1 }}>
               POWERED BY CITY OF SAN DIEGO OPEN DATA + CLAUDE AI
@@ -410,29 +564,31 @@ export default function App() {
           display: "flex", flexDirection: "column", gap: 16,
           overflowY: "auto",
         }}>
-          {/* Neighborhood Selector */}
+          {/* Area Selector */}
           <div>
-            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 8, letterSpacing: "0.08em" }}>
-              AREA
+            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 8, letterSpacing: "0.08em", display: "flex", justifyContent: "space-between" }}>
+              <span>AREA</span>
+              {areas.length > 0 && <span style={{ color: "rgba(255,255,255,0.2)" }}>{areas.length} areas</span>}
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {SD_NEIGHBORHOODS.map((n) => (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 120, overflowY: "auto" }}>
+              {areas.map((n) => (
                 <button
                   key={n.name}
                   onClick={() => setSelectedNeighborhood(n)}
                   style={{
                     fontSize: 10, padding: "4px 10px", borderRadius: 6,
-                    background: selectedNeighborhood.name === n.name
+                    background: selectedNeighborhood?.name === n.name
                       ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.04)",
-                    border: `1px solid ${selectedNeighborhood.name === n.name
+                    border: `1px solid ${selectedNeighborhood?.name === n.name
                       ? "rgba(59,130,246,0.6)" : "rgba(255,255,255,0.08)"}`,
-                    color: selectedNeighborhood.name === n.name ? "#93c5fd" : "rgba(255,255,255,0.5)",
+                    color: selectedNeighborhood?.name === n.name ? "#93c5fd" : "rgba(255,255,255,0.5)",
                     cursor: "pointer",
                     fontFamily: "inherit",
                     transition: "all 0.15s",
                   }}
                 >
                   {n.name}
+                  <span style={{ marginLeft: 4, fontSize: 8, opacity: 0.5 }}>{n.count}</span>
                 </button>
               ))}
             </div>
@@ -528,7 +684,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Meter list */}
+          {/* Meter list — search results */}
           {meters.length > 0 && (
             <div>
               <div style={{
@@ -537,7 +693,9 @@ export default function App() {
                 display: "flex", justifyContent: "space-between"
               }}>
                 <span>NEARBY METERS</span>
-                <span style={{ color: "rgba(255,255,255,0.25)" }}>{meters.length} found</span>
+                <span style={{ color: "rgba(255,255,255,0.25)" }}>
+                  {meters.length} matched · {mapMeters.length} in area
+                </span>
               </div>
               <div style={{ maxHeight: 380, overflowY: "auto" }}>
                 {meters.slice(0, 12).map((m) => (
@@ -545,7 +703,7 @@ export default function App() {
                     key={m.meter_id}
                     meter={m}
                     isSelected={selectedMeter?.meter_id === m.meter_id}
-                    onClick={() => setSelectedMeter(selectedMeter?.meter_id === m.meter_id ? null : m)}
+                    onClick={() => handleSelectMeter(m)}
                   />
                 ))}
               </div>
@@ -559,49 +717,34 @@ export default function App() {
           display: "flex", flexDirection: "column", gap: 16,
         }}>
           <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", letterSpacing: "0.08em" }}>
-            MAP VIEW — {selectedNeighborhood.name.toUpperCase()}
+            MAP VIEW — {selectedNeighborhood ? selectedNeighborhood.name.toUpperCase() : "LOADING..."}
           </div>
 
-          {!hasSearched ? (
-            <div style={{
-              flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-              flexDirection: "column", gap: 16,
-              background: "rgba(255,255,255,0.02)",
-              borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.06)",
-              minHeight: 360,
-            }}>
-              <div style={{ fontSize: 40 }}>🗺️</div>
-              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.3)", textAlign: "center" }}>
-                Select a neighborhood and describe<br />where you're heading to see parking predictions
+          {/* Legend */}
+          <div style={{ display: "flex", gap: 20 }}>
+            {[
+              { color: "#22c55e", label: "Likely Available (65%+)" },
+              { color: "#f59e0b", label: "Moderate (35-65%)" },
+              { color: "#ef4444", label: "Usually Full (<35%)" },
+            ].map(({ color, label }) => (
+              <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "rgba(255,255,255,0.4)" }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: color }} />
+                {label}
               </div>
-              <div style={{
-                display: "flex", gap: 24, marginTop: 8,
-              }}>
-                {[
-                  { color: "#22c55e", label: "Likely Available (65%+)" },
-                  { color: "#f59e0b", label: "Moderate (35-65%)" },
-                  { color: "#ef4444", label: "Usually Full (<35%)" },
-                ].map(({ color, label }) => (
-                  <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "rgba(255,255,255,0.4)" }}>
-                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: color }} />
-                    {label}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <>
-              <MiniMap
-                meters={meters}
-                centerLat={selectedNeighborhood.lat}
-                centerLon={selectedNeighborhood.lon}
-                onSelectMeter={(m) => setSelectedMeter(selectedMeter?.meter_id === m.meter_id ? null : m)}
-                selectedMeter={selectedMeter}
-              />
+            ))}
+          </div>
 
-              {/* Stats row */}
-              {meters.length > 0 && (
+          {selectedNeighborhood && <>
+            <ParkingMap
+              meters={mapMeters.length > 0 ? mapMeters : meters}
+              centerLat={selectedNeighborhood.lat}
+              centerLon={selectedNeighborhood.lon}
+              onSelectMeter={handleSelectMeter}
+              selectedMeter={selectedMeter}
+            />
+
+              {/* Stats row — shown after search */}
+              {hasSearched && meters.length > 0 && (
                 <div style={{ display: "flex", gap: 12 }}>
                   {[
                     {
@@ -615,7 +758,7 @@ export default function App() {
                       color: "#22c55e",
                     },
                     {
-                      label: "METERS FOUND",
+                      label: "NEARBY METERS",
                       value: meters.length,
                       color: "#60a5fa",
                     },
@@ -637,26 +780,31 @@ export default function App() {
                 </div>
               )}
 
+              {/* Selected meter detail panel */}
               {selectedMeter && (
                 <div style={{
                   padding: "16px",
                   background: "rgba(255,255,255,0.03)",
                   borderRadius: 10,
-                  border: "1px solid rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(59,130,246,0.2)",
                 }}>
-                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 8, letterSpacing: "0.08em" }}>
-                    SELECTED METER DETAIL
+                  <div style={{ fontSize: 10, color: "#60a5fa", marginBottom: 8, letterSpacing: "0.08em" }}>
+                    SELECTED METER
                   </div>
-                  <div style={{ display: "flex", gap: 24 }}>
-                    <div>
+                  <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
+                    <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>
                         {selectedMeter.street_address || selectedMeter.meter_id}
                       </div>
                       <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
-                        Zone: {selectedMeter.zone} · {selectedMeter.rate_range} · {selectedMeter.distance_m}m away
+                        Zone: {selectedMeter.zone || "—"} · {selectedMeter.rate_range || "Rate unknown"}
+                        {selectedMeter.distance_m != null && ` · ${selectedMeter.distance_m}m away`}
+                      </div>
+                      <div style={{ fontSize: 11, color: riskLabel(selectedMeter.citation_risk).color, marginTop: 4 }}>
+                        {riskLabel(selectedMeter.citation_risk).text}
                       </div>
                     </div>
-                    <div style={{ marginLeft: "auto", textAlign: "right" }}>
+                    <div style={{ textAlign: "right" }}>
                       <div style={{ fontSize: 28, fontWeight: 700, color: availColor(selectedMeter.availability), fontFamily: "monospace" }}>
                         {Math.round(selectedMeter.availability * 100)}%
                       </div>
@@ -665,11 +813,10 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  <AvailSparkline meter={selectedMeter} />
+                  <AvailChart meter={selectedMeter} />
                 </div>
               )}
-            </>
-          )}
+          </>}
         </div>
       </div>
     </div>
