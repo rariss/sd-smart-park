@@ -324,7 +324,7 @@ def process_citations(df):
     if df is None:
         print("  No citation data - skipping")
         with open(os.path.join(DATA_DIR, "citation_hotspots.json"), "w") as f:
-            json.dump({}, f)
+            json.dump([], f)
         return
 
     df.columns = [c.lower().strip() for c in df.columns]
@@ -335,7 +335,7 @@ def process_citations(df):
     if not lat_col or not lon_col:
         print(f"  No geo columns in citations. Columns: {list(df.columns)}")
         with open(os.path.join(DATA_DIR, "citation_hotspots.json"), "w") as f:
-            json.dump({}, f)
+            json.dump([], f)
         return
 
     df = df.rename(columns={lat_col: "lat", lon_col: "lon"})

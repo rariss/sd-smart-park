@@ -1,18 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const API_BASE = "http://localhost:8000";
+const API_BASE = "";
 
 // San Diego neighborhoods with coordinates
 const SD_NEIGHBORHOODS = [
   { name: "Gaslamp Quarter", lat: 32.7099, lon: -117.1607 },
-  { name: "Little Italy", lat: 32.7241, lon: -117.1697 },
-  { name: "Balboa Park", lat: 32.7341, lon: -117.1446 },
-  { name: "Hillcrest", lat: 32.7467, lon: -117.1614 },
-  { name: "Pacific Beach", lat: 32.7966, lon: -117.2359 },
-  { name: "Ocean Beach", lat: 32.7446, lon: -117.2498 },
-  { name: "North Park", lat: 32.7472, lon: -117.1299 },
-  { name: "Mission Valley", lat: 32.7676, lon: -117.1508 },
+  { name: "Little Italy",    lat: 32.7241, lon: -117.1697 },
+  { name: "East Village",    lat: 32.7073, lon: -117.1528 },
+  { name: "Hillcrest",       lat: 32.7467, lon: -117.1614 },
+  { name: "Pacific Beach",   lat: 32.7972, lon: -117.2517 },
+  { name: "Mission Hills",   lat: 32.7530, lon: -117.1730 },
+  { name: "North Park",      lat: 32.7472, lon: -117.1299 },
+  { name: "Normal Heights",  lat: 32.7568, lon: -117.1286 },
 ];
 
 const DOW_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -181,24 +181,42 @@ function MiniMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter })
 // ── Availability Sparkline ─────────────────────────────────────────────────────
 function AvailSparkline({ meter }) {
   const hours = Array.from({ length: 17 }, (_, i) => i + 6); // 6am-10pm
-  const now = new Date().getHours();
+  const now = new Date();
+  const nowHour = now.getHours();
+  // JS getDay(): 0=Sun, backend dow: 0=Mon — convert
+  const todayDow = now.getDay() === 0 ? 6 : now.getDay() - 1;
 
-  // Mock curve based on meter availability (real app would fetch /meter/:id/curve)
-  const curve = hours.map((h) => {
+  const [curve, setCurve] = useState(null);
+
+  useEffect(() => {
+    setCurve(null);
+    fetch(`${API_BASE}/meter/${meter.meter_id}/curve`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (!data) return;
+        // Filter to today's dow, build hour→avail map, fill hours 6-22
+        const todayEntries = data.curve.filter((e) => e.dow === todayDow);
+        const byHour = Object.fromEntries(todayEntries.map((e) => [e.hour, e.avail]));
+        setCurve(hours.map((h) => byHour[h] ?? meter.availability));
+      })
+      .catch(() => null);
+  }, [meter.meter_id]);
+
+  const displayCurve = curve ?? hours.map((h) => {
     const base = meter.availability;
     const noise = Math.sin(h * 0.8 + meter.lat * 100) * 0.15;
     return Math.max(0.05, Math.min(0.95, base + noise));
   });
 
   const W = 200, H = 40;
-  const pts = curve.map((v, i) => {
-    const x = (i / (curve.length - 1)) * W;
+  const pts = displayCurve.map((v, i) => {
+    const x = (i / (displayCurve.length - 1)) * W;
     const y = H - v * H;
     return `${x},${y}`;
   });
 
-  const nowIdx = hours.indexOf(now);
-  const nowX = nowIdx >= 0 ? (nowIdx / (curve.length - 1)) * W : null;
+  const nowIdx = hours.indexOf(nowHour);
+  const nowX = nowIdx >= 0 ? (nowIdx / (displayCurve.length - 1)) * W : null;
 
   return (
     <div style={{ marginTop: 8 }}>
