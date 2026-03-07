@@ -7,6 +7,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/find-parking": "http://localhost:8000",
+      "/areas": "http://localhost:8000",
       "/meters": "http://localhost:8000",
       "/meter": "http://localhost:8000",
       "/health": "http://localhost:8000",

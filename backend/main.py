@@ -81,6 +81,19 @@ def get_citation_risk(lat: float, lon: float) -> float:
     return 0.0
 
 
+def sanitize(obj):
+    """Recursively replace NaN/Inf floats with None so JSON serialization doesn't blow up."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize(v) for v in obj]
+    return obj
+
+
 def find_nearby_meters(lat: float, lon: float, radius_m: int = 400, limit: int = 20) -> list:
     """Find meters within radius, enriched with availability and citation risk."""
     now = datetime.now()
@@ -94,16 +107,16 @@ def find_nearby_meters(lat: float, lon: float, radius_m: int = 400, limit: int =
             meter_id = meter["meter_id"]
             avail = get_availability(meter_id, dow, hour)
             citation_risk = get_citation_risk(meter["lat"], meter["lon"])
-            results.append({
+            results.append(sanitize({
                 **meter,
                 "distance_m": round(dist),
                 "availability": avail,
                 "citation_risk": citation_risk,
                 "dow": dow,
                 "hour": hour,
-            })
+            }))
 
-    results.sort(key=lambda x: -x["availability"])
+    results.sort(key=lambda x: -(x["availability"] or 0))
     return results[:limit]
 
 
@@ -143,6 +156,29 @@ Keep your response conversational, specific, and under 150 words. Be direct — 
 """
 
 
+# Pre-compute area centroids at startup
+def _build_areas():
+    from collections import defaultdict
+    buckets = defaultdict(list)
+    for m in METERS:
+        area = m.get("area")
+        if area:
+            buckets[area].append(m)
+    result = []
+    for area, ms in buckets.items():
+        lats = [m["lat"] for m in ms if m.get("lat") is not None]
+        lons = [m["lon"] for m in ms if m.get("lon") is not None]
+        result.append({
+            "name": area,
+            "count": len(ms),
+            "lat": round(sum(lats) / len(lats), 6) if lats else None,
+            "lon": round(sum(lons) / len(lons), 6) if lons else None,
+        })
+    return sorted(result, key=lambda x: -x["count"])
+
+AREAS = _build_areas()
+print(f"Built {len(AREAS)} areas")
+
 # ── API Routes ─────────────────────────────────────────────────────────────────
 class ParkingQuery(BaseModel):
     query: str
@@ -158,6 +194,12 @@ class MeterDetailQuery(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok", "meters_loaded": len(METERS)}
+
+
+@app.get("/areas")
+def list_areas():
+    """Return all areas that have meter data, with centroid lat/lon and meter count."""
+    return AREAS
 
 
 @app.post("/find-parking")
@@ -201,9 +243,6 @@ def meter_curve(meter_id: str):
 
 
 @app.get("/meters/area")
-def meters_in_area(lat: float, lon: float, radius_m: int = 400):
+def meters_in_area(lat: float, lon: float, radius_m: int = 1000, limit: int = 400):
     """Return all meters in an area (for map rendering without AI)."""
-    now = datetime.now()
-    dow = now.weekday()
-    hour = now.hour
-    return find_nearby_meters(lat, lon, radius_m, limit=100)
+    return find_nearby_meters(lat, lon, radius_m, limit=min(limit, 500))
