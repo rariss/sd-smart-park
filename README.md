@@ -33,12 +33,31 @@ Frontend (React)  →  FastAPI Backend  →  Claude API
 
 ## Quick Start
 
-### 1. Preprocess the Data (~5–10 min, run once)
+### Prerequisites
+
+- Python 3.11+
+- [Poetry](https://python-poetry.org/docs/#installation)
+- Node.js 18+
+
+### 1. Install Python dependencies
 
 ```bash
-cd scripts
-pip install pandas requests tqdm
-python preprocess.py
+poetry install
+```
+
+This creates a `.venv` in the project root and installs all Python dependencies.
+
+### 2. Set your Anthropic API key
+
+```bash
+cp .env.example .env
+# Edit .env and replace `your_key_here` with your actual key
+```
+
+### 3. Preprocess the data (~5–10 min, run once)
+
+```bash
+poetry run python scripts/preprocess.py
 ```
 
 This downloads from `data.sandiego.gov` and writes 3 files to `data/`:
@@ -46,16 +65,13 @@ This downloads from `data.sandiego.gov` and writes 3 files to `data/`:
 - `availability_scores.json` — per-meter availability by day-of-week + hour
 - `citation_hotspots.json` — citation density grid cells
 
-### 2. Start the Backend
+### 4. Start the backend
 
 ```bash
-cd backend
-pip install fastapi uvicorn anthropic python-dotenv
-export ANTHROPIC_API_KEY=your_key_here
-uvicorn main:app --reload --port 8000
+poetry run uvicorn backend.main:app --reload --port 8000
 ```
 
-### 3. Start the Frontend
+### 5. Start the frontend
 
 ```bash
 cd frontend
