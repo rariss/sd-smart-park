@@ -5,16 +5,15 @@ Downloads and processes San Diego parking meter data into a fast lookup table.
 
 Checks for a pre-built local CSV first (data/meter_temporal_occupancy.csv).
 If found and valid, derives meter_locations.json and availability_scores.json
-from it directly — no network needed for those two files. Citations are always
-fetched from the SODA API (not present in the local CSV).
+from it directly — no network needed.
 
 Usage:
     poetry run python scripts/preprocess.py
 
 Output:
     ../data/meter_locations.json     - Active meter locations with zone/rate info
-    ../data/availability_scores.json - Per-meter availability by day/hour
-    ../data/citation_hotspots.json   - Citation density by area
+    ../data/availability_scores.json - Per-meter availability by day/hour, plus
+                                       citation_prob and avg_fine if present in CSV
 """
 
 import pandas as pd
@@ -52,7 +51,6 @@ SD_LON = (-117.4, -116.9)
 METER_LOCATIONS_URL = "https://seshat.datasd.org/parking_meters/parking_meter_locations_datasd_v1.csv"
 TRANSACTIONS_2024_DAY_URL = "https://seshat.datasd.org/parking_meters/treas_parking_payments_2024_datasd.csv"
 TRANSACTIONS_2025_DAY_URL = "https://seshat.datasd.org/parking_meters/treas_parking_payments_2025_datasd.csv"
-CITATIONS_URL = "https://seshat.datasd.org/pd/parking_citations_2024_datasd.csv"
 
 
 # ── Local CSV path ─────────────────────────────────────────────────────────────
@@ -157,13 +155,30 @@ def process_from_local_csv(df):
     # ── [2/2] Availability scores ──────────────────────────────────────────────
     print("\n[2/2] Building availability scores from local CSV...")
 
+    has_citation_prob = "citation_prob" in df.columns
+    has_avg_fine = "avg_fine" in df.columns
+    if has_citation_prob or has_avg_fine:
+        print(f"  Found citation columns: citation_prob={has_citation_prob}, avg_fine={has_avg_fine}")
+
     avail_df = df[["pole_id", "day_of_week", "hour", "occupancy_prob"]].copy()
     avail_df["dow"] = avail_df["day_of_week"].map(DOW_MAP)
     avail_df["avail"] = (1 - avail_df["occupancy_prob"]).round(2).clip(0, 1)
+    if has_citation_prob:
+        avail_df["citation_prob"] = df["citation_prob"]
+    if has_avg_fine:
+        avail_df["avg_fine"] = df["avg_fine"]
 
-    scores = defaultdict(list)
+    # Build per-meter dict: { meter_id: { scores: [...], citation_prob, avg_fine } }
+    scores = {}
     for _, row in avail_df.iterrows():
-        scores[str(row["pole_id"])].append({
+        mid = str(row["pole_id"])
+        if mid not in scores:
+            scores[mid] = {
+                "scores": [],
+                "citation_prob": float(row["citation_prob"]) if has_citation_prob and pd.notna(row.get("citation_prob")) else 0.0,
+                "avg_fine": float(row["avg_fine"]) if has_avg_fine and pd.notna(row.get("avg_fine")) else 0.0,
+            }
+        scores[mid]["scores"].append({
             "dow": int(row["dow"]),
             "hour": int(row["hour"]),
             "avail": float(row["avail"]),
@@ -265,10 +280,13 @@ def process_transactions(dfs):
     counts["occupancy"] = counts["tx_count"] / bucket_max.clip(lower=1)
     counts["availability"] = (1 - counts["occupancy"]).round(2)
 
-    # Build lookup dict: meter_id -> list of {dow, hour, availability}
-    scores = defaultdict(list)
+    # Build lookup dict: meter_id -> { scores: [{dow, hour, avail}], citation_prob, avg_fine }
+    scores = {}
     for _, row in counts.iterrows():
-        scores[str(row["meter_id"])].append({
+        mid = str(row["meter_id"])
+        if mid not in scores:
+            scores[mid] = {"scores": [], "citation_prob": 0.0, "avg_fine": 0.0}
+        scores[mid]["scores"].append({
             "dow": int(row["dow"]),
             "hour": int(row["hour"]),
             "avail": float(row["availability"])
@@ -283,7 +301,7 @@ def process_transactions(dfs):
 
 def generate_sample_scores():
     """Fallback: generate realistic-looking sample scores for demo."""
-    import random, math
+    import random
     random.seed(42)
 
     # Simulate ~2000 meters with realistic patterns
@@ -308,7 +326,11 @@ def generate_sample_scores():
 
                 avail = max(0.05, min(0.95, base + random.gauss(0, 0.15)))
                 entries.append({"dow": dow, "hour": hour, "avail": round(avail, 2)})
-        scores[meter_id] = entries
+        scores[meter_id] = {
+            "scores": entries,
+            "citation_prob": round(random.uniform(0, 0.5), 2),
+            "avg_fine": round(random.uniform(30, 100), 2),
+        }
 
     with open(os.path.join(DATA_DIR, "availability_scores.json"), "w") as f:
         json.dump(scores, f)
@@ -316,51 +338,6 @@ def generate_sample_scores():
     print(f"  ✓ Generated sample scores for {len(scores):,} meters")
     return scores
 
-
-def process_citations(df):
-    """Compute citation density by geo grid cell."""
-    print("\n[3/3] Processing citations...")
-
-    if df is None:
-        print("  No citation data - skipping")
-        with open(os.path.join(DATA_DIR, "citation_hotspots.json"), "w") as f:
-            json.dump([], f)
-        return
-
-    df.columns = [c.lower().strip() for c in df.columns]
-
-    lat_col = next((c for c in df.columns if "lat" in c), None)
-    lon_col = next((c for c in df.columns if "lon" in c or "lng" in c), None)
-
-    if not lat_col or not lon_col:
-        print(f"  No geo columns in citations. Columns: {list(df.columns)}")
-        with open(os.path.join(DATA_DIR, "citation_hotspots.json"), "w") as f:
-            json.dump([], f)
-        return
-
-    df = df.rename(columns={lat_col: "lat", lon_col: "lon"})
-    df = df.dropna(subset=["lat", "lon"])
-    df = df[df["lat"].between(32.5, 33.2) & df["lon"].between(-117.4, -116.9)]
-
-    # Bucket into ~100m grid cells
-    GRID = 0.001
-    df["grid_lat"] = (df["lat"] / GRID).round() * GRID
-    df["grid_lon"] = (df["lon"] / GRID).round() * GRID
-
-    hotspots = df.groupby(["grid_lat", "grid_lon"]).size().reset_index(name="citations")
-
-    # Normalize 0-1
-    max_c = hotspots["citations"].max()
-    hotspots["risk"] = (hotspots["citations"] / max_c).round(2)
-
-    # Only keep high-risk cells
-    hotspots = hotspots[hotspots["risk"] > 0.1]
-
-    out = hotspots.to_dict(orient="records")
-    with open(os.path.join(DATA_DIR, "citation_hotspots.json"), "w") as f:
-        json.dump(out, f)
-
-    print(f"  ✓ Saved {len(out):,} citation hotspot cells")
 
 
 def main():
@@ -400,15 +377,9 @@ def main():
 
         process_transactions([tx_2024, tx_2025])
 
-    # ── Step 3: Citations — always fetched (not in local CSV) ──────────────────
-    print("\n[3/3] Fetching citation data...")
-    citations_df = download_csv(CITATIONS_URL, "Citations 2024")
-    process_citations(citations_df)
-
     print("\n✅ All done! Data written to /data/")
     print("   meter_locations.json")
-    print("   availability_scores.json")
-    print("   citation_hotspots.json")
+    print("   availability_scores.json  (includes citation_prob + avg_fine per meter)")
 
 
 if __name__ == "__main__":

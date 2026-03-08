@@ -19,9 +19,10 @@ function availLabel(score) {
   return "Usually Full";
 }
 
-function riskLabel(risk) {
-  if (risk > 0.6) return { text: "High Ticket Risk", color: "#ef4444" };
-  if (risk > 0.3) return { text: "Some Enforcement", color: "#f59e0b" };
+function riskLabel(citation_prob, avg_fine) {
+  const fine = avg_fine ? ` · avg $${Math.round(avg_fine)}` : "";
+  if (citation_prob > 0.06) return { text: `High Ticket Risk${fine}`, color: "#ef4444" };
+  if (citation_prob > 0.03) return { text: `Some Enforcement${fine}`, color: "#f59e0b" };
   return { text: "Low Risk", color: "#22c55e" };
 }
 
@@ -39,7 +40,8 @@ function generateSampleMeters(centerLat, centerLon) {
       lon: centerLon + Math.sin(angle) * dist,
       distance_m: Math.round(50 + Math.random() * 350),
       availability: parseFloat(avail.toFixed(2)),
-      citation_risk: parseFloat((Math.random() * 0.8).toFixed(2)),
+      citation_prob: parseFloat((Math.random() * 0.8).toFixed(2)),
+      avg_fine: parseFloat((30 + Math.random() * 70).toFixed(0)),
       street_address: `${100 + i * 10} ${streets[i % streets.length]}`,
       zone: ["Downtown", "Gaslamp", "Core"][i % 3],
       rate_range: ["$1.25/hr", "$1.50/hr", "$2.00/hr", "Free (2hr)"][i % 4],
@@ -181,29 +183,86 @@ function renderInline(text) {
   );
 }
 
+function parseTableRows(lines) {
+  return lines.map((line) =>
+    line.replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim())
+  );
+}
+
 function MarkdownText({ text }) {
   if (!text) return null;
   const lines = text.split("\n");
   const elements = [];
   let listItems = [];
+  let tableLines = [];
 
   const flushList = () => {
-    if (listItems.length > 0) {
-      elements.push(
-        <ul key={`ul-${elements.length}`} style={{ margin: "6px 0", paddingLeft: 18 }}>
-          {listItems.map((item, i) => (
-            <li key={i} style={{ marginBottom: 3, color: "rgba(255,255,255,0.75)", lineHeight: 1.6 }}>
-              {renderInline(item)}
-            </li>
-          ))}
-        </ul>
-      );
-      listItems = [];
+    if (listItems.length === 0) return;
+    elements.push(
+      <ul key={`ul-${elements.length}`} style={{ margin: "6px 0", paddingLeft: 18 }}>
+        {listItems.map((item, i) => (
+          <li key={i} style={{ marginBottom: 3, color: "rgba(255,255,255,0.75)", lineHeight: 1.6 }}>
+            {renderInline(item)}
+          </li>
+        ))}
+      </ul>
+    );
+    listItems = [];
+  };
+
+  const flushTable = () => {
+    if (tableLines.length < 2) {
+      tableLines.forEach((l) => elements.push(<p key={`tp-${elements.length}`} style={{ margin: "4px 0", color: "rgba(255,255,255,0.75)" }}>{renderInline(l)}</p>));
+      tableLines = [];
+      return;
     }
+    const [headerLine, , ...bodyLines] = tableLines; // skip separator line
+    const headers = parseTableRows([headerLine])[0];
+    const rows = parseTableRows(bodyLines);
+    elements.push(
+      <div key={`tbl-${elements.length}`} style={{ overflowX: "auto", margin: "10px 0" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 11, fontFamily: "monospace" }}>
+          <thead>
+            <tr>
+              {headers.map((h, i) => (
+                <th key={i} style={{
+                  padding: "5px 10px", textAlign: "left", fontWeight: 600,
+                  color: "#93c5fd", borderBottom: "1px solid rgba(96,165,250,0.3)",
+                  whiteSpace: "nowrap",
+                }}>{renderInline(h)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, ri) => (
+              <tr key={ri} style={{ background: ri % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent" }}>
+                {row.map((cell, ci) => (
+                  <td key={ci} style={{
+                    padding: "4px 10px", color: "rgba(255,255,255,0.75)",
+                    borderBottom: "1px solid rgba(255,255,255,0.05)",
+                  }}>{renderInline(cell)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+    tableLines = [];
   };
 
   lines.forEach((line, i) => {
     const trimmed = line.trim();
+
+    // Table row detection
+    if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+      flushList();
+      tableLines.push(trimmed);
+      return;
+    } else if (tableLines.length > 0) {
+      flushTable();
+    }
+
     if (!trimmed) {
       flushList();
       return;
@@ -225,6 +284,7 @@ function MarkdownText({ text }) {
     }
   });
   flushList();
+  flushTable();
   return <div>{elements}</div>;
 }
 
@@ -278,7 +338,7 @@ function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter
         {meters.map((m) => {
           const color = availColor(m.availability);
           const isSelected = selectedMeter?.meter_id === m.meter_id;
-          const risk = riskLabel(m.citation_risk);
+          const risk = riskLabel(m.citation_prob, m.avg_fine);
           return (
             <CircleMarker
               key={m.meter_id}
@@ -547,7 +607,7 @@ function AvailChart({ meter, selectedDow, selectedHour }) {
 
 // ── Meter Card ─────────────────────────────────────────────────────────────────
 function MeterCard({ meter, isSelected, onClick, selectedDow, selectedHour }) {
-  const risk = riskLabel(meter.citation_risk);
+  const risk = riskLabel(meter.citation_prob, meter.avg_fine);
   const avail = meter.availability;
 
   return (
@@ -631,7 +691,6 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [selectedMeter, setSelectedMeter] = useState(null);
   const [usingSampleData, setUsingSampleData] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
   const [resolvedLocation, setResolvedLocation] = useState(null); // { area, reasoning }
   const selectedAreaRef = useCallback((node) => { if (node) node.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [selectedNeighborhood]);
 
@@ -646,9 +705,6 @@ export default function App() {
   const isNow = selectedDow === nowDow && selectedHour === nowHour;
 
   const [userLocation, setUserLocation] = useState(null); // { lat, lon, label }
-  // For Claude /find-parking: search near user pin if set, else area centroid
-  const activeLat = userLocation?.lat ?? selectedNeighborhood?.lat;
-  const activeLon = userLocation?.lon ?? selectedNeighborhood?.lon;
 
   const handleLocationSelect = useCallback(async (loc) => {
     setUserLocation(loc);
@@ -672,7 +728,6 @@ export default function App() {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           setMeters(data);
-          setHasSearched(true);
           setRecommendation("");
           setUsingSampleData(false);
         }
@@ -683,7 +738,13 @@ export default function App() {
   const handleLocationClear = useCallback(() => {
     setUserLocation(null);
     setMeters([]);
-    setHasSearched(false);
+    setRecommendation("");
+  }, []);
+
+  const handleAreaSelect = useCallback((area) => {
+    setUserLocation(null);      // clear address pin — area is now the active location
+    setSelectedNeighborhood(area);
+    setMeters([]);
     setRecommendation("");
   }, []);
 
@@ -714,12 +775,15 @@ export default function App() {
   const handleSearch = useCallback(async () => {
     if (!query.trim()) return;
     setLoading(true);
-    setHasSearched(true);
     setSelectedMeter(null);
     setResolvedLocation(null);
 
-    // Resolve location from natural language query
+    // Step 1: resolve location AND day/time from the natural language query
     let targetArea = selectedNeighborhood;
+    let queryResolvedNewLocation = false;
+    // Use local effective dow/hour so stale closure values don't bleed into the fetch
+    let effectiveDow = selectedDow;
+    let effectiveHour = selectedHour;
     try {
       const locRes = await fetch(`${API_BASE}/resolve-location`, {
         method: "POST",
@@ -730,14 +794,25 @@ export default function App() {
         const locData = await locRes.json();
         if (locData.area) {
           targetArea = locData.area;
+          queryResolvedNewLocation = true;
           setResolvedLocation(locData);
-          // Match against the areas array so the selector button highlights correctly
           const matched = areas.find((a) => a.name === locData.area.name) || locData.area;
           setSelectedNeighborhood(matched);
+          // Clear pinned address — resolved area is now the active location
+          setUserLocation(null);
+        }
+        // Apply day/time if Claude extracted them from the query
+        if (locData.dow != null) {
+          effectiveDow = locData.dow;
+          setSelectedDow(locData.dow);
+        }
+        if (locData.hour != null) {
+          effectiveHour = locData.hour;
+          setSelectedHour(locData.hour);
         }
       }
     } catch {
-      // If resolve fails, fall through to use selectedNeighborhood
+      // If resolve fails, fall through with current values
     }
 
     if (!targetArea) {
@@ -745,17 +820,41 @@ export default function App() {
       return;
     }
 
+    // If this query resolved a new location, use targetArea coords directly —
+    // userLocation in the closure is stale (setUserLocation(null) above doesn't
+    // update the closure value until the next render).
+    const effectiveLat = queryResolvedNewLocation ? targetArea.lat : (userLocation?.lat ?? targetArea.lat);
+    const effectiveLon = queryResolvedNewLocation ? targetArea.lon : (userLocation?.lon ?? targetArea.lon);
+
+    // Step 2: fetch fresh area meters for the resolved location AND time —
+    // must await this before calling Claude so it has the correct context.
+    let freshMeters = [];
+    try {
+      const metersRes = await fetch(
+        `${API_BASE}/meters/area?lat=${effectiveLat}&lon=${effectiveLon}&radius_m=1500&limit=500&dow=${effectiveDow}&hour=${effectiveHour}`
+      );
+      if (metersRes.ok) {
+        const metersData = await metersRes.json();
+        if (Array.isArray(metersData) && metersData.length > 0) {
+          freshMeters = metersData;
+          setMapMeters(freshMeters);
+        }
+      }
+    } catch { /* fall through with empty freshMeters */ }
+
+    // Step 3: call Claude with fully-resolved location, time, and meter context
     try {
       const res = await fetch(`${API_BASE}/find-parking`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query,
-          lat: userLocation?.lat ?? targetArea.lat,
-          lon: userLocation?.lon ?? targetArea.lon,
+          lat: effectiveLat,
+          lon: effectiveLon,
           radius_m: 500,
-          dow: selectedDow,
-          hour: selectedHour,
+          dow: effectiveDow,
+          hour: effectiveHour,
+          meters: freshMeters.length > 0 ? freshMeters : undefined,
         }),
       });
 
@@ -773,7 +872,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [query, selectedNeighborhood, userLocation]);
+  }, [query, selectedNeighborhood, userLocation, selectedDow, selectedHour]);
 
   // Selecting a meter — unified handler for both list and map clicks
   const handleSelectMeter = useCallback((m) => {
@@ -877,7 +976,7 @@ export default function App() {
                 <button
                   key={n.name}
                   ref={selectedNeighborhood?.name === n.name ? selectedAreaRef : null}
-                  onClick={() => setSelectedNeighborhood(n)}
+                  onClick={() => handleAreaSelect(n)}
                   style={{
                     fontSize: 10, padding: "4px 10px", borderRadius: 6,
                     background: selectedNeighborhood?.name === n.name
@@ -1113,42 +1212,49 @@ export default function App() {
               userLocation={userLocation}
             />
 
-              {/* Stats row — shown after search */}
-              {hasSearched && meters.length > 0 && (
-                <div style={{ display: "flex", gap: 12 }}>
-                  {[
-                    {
-                      label: "AVG AVAILABILITY",
-                      value: `${Math.round((meters.reduce((s, m) => s + m.availability, 0) / meters.length) * 100)}%`,
-                      color: availColor(meters.reduce((s, m) => s + m.availability, 0) / meters.length),
-                    },
-                    {
-                      label: "BEST OPTION",
-                      value: `${Math.round(meters[0]?.availability * 100)}%`,
-                      color: "#22c55e",
-                    },
-                    {
-                      label: "NEARBY METERS",
-                      value: meters.length,
-                      color: "#60a5fa",
-                    },
-                    {
-                      label: "HIGH RISK ZONES",
-                      value: meters.filter((m) => m.citation_risk > 0.6).length,
-                      color: "#ef4444",
-                    },
-                  ].map(({ label, value, color }) => (
-                    <div key={label} style={{
-                      flex: 1, padding: "12px 14px",
-                      background: "rgba(255,255,255,0.03)",
-                      borderRadius: 8, border: "1px solid rgba(255,255,255,0.06)",
-                    }}>
-                      <div style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", letterSpacing: "0.08em" }}>{label}</div>
-                      <div style={{ fontSize: 22, fontWeight: 700, color, marginTop: 4 }}>{value}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              {/* Stats row — sourced from mapMeters (full area data from API) */}
+              {mapMeters.length > 0 && (() => {
+                const src = mapMeters;
+                const avgAvail = src.reduce((s, m) => s + (m.availability ?? 0), 0) / src.length;
+                const bestAvail = Math.max(...src.map((m) => m.availability ?? 0));
+                const highRiskCount = src.filter((m) => (m.citation_prob ?? 0) > 0.06).length;
+                const highRiskPct = Math.round((highRiskCount / src.length) * 100);
+                return (
+                  <div style={{ display: "flex", gap: 12 }}>
+                    {[
+                      {
+                        label: "AVG AVAILABILITY",
+                        value: `${Math.round(avgAvail * 100)}%`,
+                        color: availColor(avgAvail),
+                      },
+                      {
+                        label: "BEST OPTION",
+                        value: `${Math.round(bestAvail * 100)}%`,
+                        color: "#22c55e",
+                      },
+                      {
+                        label: "AREA METERS",
+                        value: src.length,
+                        color: "#60a5fa",
+                      },
+                      {
+                        label: "HIGH RISK METERS",
+                        value: `${highRiskPct}%`,
+                        color: highRiskPct > 30 ? "#ef4444" : highRiskPct > 10 ? "#f59e0b" : "#22c55e",
+                      },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} style={{
+                        flex: 1, padding: "12px 14px",
+                        background: "rgba(255,255,255,0.03)",
+                        borderRadius: 8, border: "1px solid rgba(255,255,255,0.06)",
+                      }}>
+                        <div style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", letterSpacing: "0.08em" }}>{label}</div>
+                        <div style={{ fontSize: 22, fontWeight: 700, color, marginTop: 4 }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
 
               {/* Selected meter detail panel */}
               {selectedMeter && (
@@ -1177,8 +1283,8 @@ export default function App() {
                         {selectedMeter.days_in_operation && <div>Days: {selectedMeter.days_in_operation}</div>}
                         {selectedMeter.distance_m != null && <div>{selectedMeter.distance_m}m away</div>}
                       </div>
-                      <div style={{ fontSize: 11, color: riskLabel(selectedMeter.citation_risk).color, marginTop: 4 }}>
-                        {riskLabel(selectedMeter.citation_risk).text}
+                      <div style={{ fontSize: 11, color: riskLabel(selectedMeter.citation_prob, selectedMeter.avg_fine).color, marginTop: 4 }}>
+                        {riskLabel(selectedMeter.citation_prob, selectedMeter.avg_fine).text}
                       </div>
                     </div>
                     <div style={{ textAlign: "right" }}>
