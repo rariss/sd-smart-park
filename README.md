@@ -133,6 +133,12 @@ GET /health
 
 ---
 
+## Demo Video
+
+[Watch the demo](https://drive.google.com/file/d/1jo6rmbSH8s07UN9ipMbCiZjoD2sM5bQW/view?usp=sharing)
+
+---
+
 ## Demo Script (for judges)
 
 1. Select **Gaslamp Quarter**
