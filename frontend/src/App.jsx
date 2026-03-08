@@ -892,6 +892,8 @@ export default function App() {
   ];
 
   return (
+    <>
+    <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
     <div style={{
       minHeight: "100vh",
       background: "#080f18",
@@ -1122,23 +1124,51 @@ export default function App() {
           </div>
 
           {/* AI Recommendation */}
-          {recommendation && (
+          {(loading || recommendation) && (
             <div style={{
               padding: "14px 16px",
               background: "rgba(59,130,246,0.07)",
-              border: "1px solid rgba(59,130,246,0.2)",
+              border: `1px solid ${loading ? "rgba(59,130,246,0.15)" : "rgba(59,130,246,0.2)"}`,
               borderRadius: 10,
             }}>
               <div style={{
                 fontSize: 9, letterSpacing: "0.1em",
                 color: "#60a5fa", marginBottom: 8, fontWeight: 600,
+                display: "flex", alignItems: "center", gap: 6,
               }}>
                 ✦ CLAUDE RECOMMENDATION
+                {loading && (
+                  <span style={{ display: "inline-flex", gap: 3, marginLeft: 2 }}>
+                    {[0, 1, 2].map((i) => (
+                      <span key={i} style={{
+                        width: 4, height: 4, borderRadius: "50%",
+                        background: "#60a5fa",
+                        animation: "pulse 1.2s ease-in-out infinite",
+                        animationDelay: `${i * 0.2}s`,
+                        display: "inline-block",
+                      }} />
+                    ))}
+                  </span>
+                )}
               </div>
-              <div style={{ fontSize: 12 }}>
-                <MarkdownText text={recommendation} />
-              </div>
-              {usingSampleData && (
+              {loading ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {[1, 0.7, 0.5].map((opacity, i) => (
+                    <div key={i} style={{
+                      height: 10, borderRadius: 4,
+                      background: `rgba(96,165,250,${opacity * 0.15})`,
+                      width: `${[92, 78, 55][i]}%`,
+                      animation: "pulse 1.2s ease-in-out infinite",
+                      animationDelay: `${i * 0.15}s`,
+                    }} />
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12 }}>
+                  <MarkdownText text={recommendation} />
+                </div>
+              )}
+              {!loading && usingSampleData && (
                 <div style={{
                   fontSize: 9, color: "rgba(255,255,255,0.3)",
                   marginTop: 8, borderTop: "1px solid rgba(255,255,255,0.06)",
@@ -1303,5 +1333,6 @@ export default function App() {
         </div>
       </div>
     </div>
+    </>
   );
 }
