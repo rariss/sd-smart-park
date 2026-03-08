@@ -46,9 +46,8 @@ def load_json(filename):
 
 METERS: list = load_json("meter_locations.json")
 AVAILABILITY: dict = load_json("availability_scores.json")
-CITATION_HOTSPOTS: list = load_json("citation_hotspots.json")
 
-print(f"Loaded {len(METERS):,} meters, {len(AVAILABILITY):,} availability records, {len(CITATION_HOTSPOTS):,} citation cells")
+print(f"Loaded {len(METERS):,} meters, {len(AVAILABILITY):,} availability records")
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def haversine(lat1, lon1, lat2, lon2) -> float:
@@ -63,22 +62,20 @@ def haversine(lat1, lon1, lat2, lon2) -> float:
 
 def get_availability(meter_id: str, dow: int, hour: int) -> float:
     """Get historical availability score (0=full, 1=empty) for a meter/time."""
-    scores = AVAILABILITY.get(str(meter_id), [])
-    for entry in scores:
+    meter_data = AVAILABILITY.get(str(meter_id), {})
+    entries = meter_data.get("scores", []) if isinstance(meter_data, dict) else meter_data
+    for entry in entries:
         if entry["dow"] == dow and entry["hour"] == hour:
             return entry["avail"]
     return 0.5  # default: unknown
 
 
-def get_citation_risk(lat: float, lon: float) -> float:
-    """Get citation risk (0=safe, 1=high risk) near a lat/lon."""
-    GRID = 0.001
-    grid_lat = round(lat / GRID) * GRID
-    grid_lon = round(lon / GRID) * GRID
-    for cell in CITATION_HOTSPOTS:
-        if abs(cell["grid_lat"] - grid_lat) < 0.0005 and abs(cell["grid_lon"] - grid_lon) < 0.0005:
-            return cell["risk"]
-    return 0.0
+def get_citation_data(meter_id: str) -> tuple:
+    """Return (citation_prob, avg_fine) for a meter from availability_scores."""
+    meter_data = AVAILABILITY.get(str(meter_id), {})
+    if isinstance(meter_data, dict):
+        return meter_data.get("citation_prob", 0.0), meter_data.get("avg_fine", 0.0)
+    return 0.0, 0.0
 
 
 def sanitize(obj):
@@ -110,12 +107,13 @@ def find_nearby_meters(lat: float, lon: float, radius_m: int = 400, limit: int =
         if dist <= radius_m:
             meter_id = meter["meter_id"]
             avail = get_availability(meter_id, dow, hour)
-            citation_risk = get_citation_risk(meter["lat"], meter["lon"])
+            citation_prob, avg_fine = get_citation_data(meter_id)
             results.append(sanitize({
                 **meter,
                 "distance_m": round(dist),
                 "availability": avail,
-                "citation_risk": citation_risk,
+                "citation_prob": citation_prob,
+                "avg_fine": avg_fine,
                 "dow": dow,
                 "hour": hour,
             }))
@@ -131,13 +129,21 @@ def build_claude_prompt(query: str, meters: list, dow: int, hour: int) -> str:
     meter_summary = []
     for m in meters[:10]:  # send top 10 to Claude
         avail_pct = int(m["availability"] * 100)
-        risk_label = "High" if m["citation_risk"] > 0.6 else "Medium" if m["citation_risk"] > 0.3 else "Low"
+        citation_prob = m.get("citation_prob") or 0.0
+        avg_fine = m.get("avg_fine") or 0.0
+        fine_str = f", avg ${avg_fine:.0f} fine" if avg_fine else ""
+        if citation_prob > 0.06:
+            citation_str = f"High Ticket Risk ({int(citation_prob * 100)}%{fine_str})"
+        elif citation_prob > 0.03:
+            citation_str = f"Some Enforcement ({int(citation_prob * 100)}%{fine_str})"
+        else:
+            citation_str = "Low Risk"
         addr = m.get("street_address", f"lat {m['lat']:.4f}, lon {m['lon']:.4f}")
         rate = m.get("rate_range", "unknown rate")
         zone = m.get("zone", "")
         meter_summary.append(
             f"- Meter {m['meter_id']} at {addr} | Zone: {zone} | Rate: {rate} | "
-            f"Distance: {m['distance_m']}m | Availability: {avail_pct}% | Citation Risk: {risk_label}"
+            f"Distance: {m['distance_m']}m | Availability: {avail_pct}% | {citation_str}"
         )
 
     meters_text = "\n".join(meter_summary) if meter_summary else "No meter data available nearby."
@@ -191,6 +197,7 @@ class ParkingQuery(BaseModel):
     radius_m: Optional[int] = 400
     dow: Optional[int] = None   # 0=Mon … 6=Sun; None = use server time
     hour: Optional[int] = None  # 0-23; None = use server time
+    meters: Optional[list] = None  # pre-fetched meters from frontend (with citation data)
 
 
 class MeterDetailQuery(BaseModel):
@@ -203,24 +210,38 @@ class LocationQuery(BaseModel):
 
 @app.post("/resolve-location")
 async def resolve_location(req: LocationQuery):
-    """Use Claude to extract destination coordinates, then find the nearest area by distance."""
+    """Use Claude to extract destination coordinates and optional day/time, then find nearest area."""
     prompt = f"""The user is looking for parking in San Diego. They said: "{req.query}"
 
-Extract the specific destination they're heading to and provide its approximate coordinates.
-Respond with ONLY valid JSON, no extra text:
-{{"location_name": "<place or landmark name>", "lat": <latitude>, "lon": <longitude>, "reasoning": "<one sentence>"}}
+Extract the destination and any mentioned day/time. Respond with ONLY valid JSON, no extra text:
+{{
+  "location_name": "<place or landmark name>",
+  "lat": <latitude>,
+  "lon": <longitude>,
+  "reasoning": "<one sentence>",
+  "dow": <0-6 where 0=Monday, 6=Sunday, or null if not mentioned>,
+  "hour": <0-23 in 24h format, or null if not mentioned>
+}}
 
-Examples:
+Location examples:
 - "Padres game tonight" → Petco Park → lat 32.7073, lon -117.1566
 - "Dinner in Little Italy" → Little Italy, SD → lat 32.7249, lon -117.1699
 - "Balboa Park museum" → Balboa Park → lat 32.7341, lon -117.1446
 
-If no specific location is mentioned, default to downtown San Diego: lat 32.7157, lon -117.1611."""
+Day/time examples:
+- "Saturday at 3pm" → dow 5, hour 15
+- "Friday night around 8" → dow 4, hour 20
+- "tomorrow morning" → null (relative, cannot resolve)
+- "tonight" → null (relative, cannot resolve)
 
+If no specific location is mentioned, default to downtown San Diego: lat 32.7157, lon -117.1611.
+If no specific day or time is mentioned, use null for dow and hour."""
+
+    message = None
     try:
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=120,
+            max_tokens=150,
             messages=[{"role": "user", "content": prompt}]
         )
         raw = message.content[0].text.strip()
@@ -233,21 +254,24 @@ If no specific location is mentioned, default to downtown San Diego: lat 32.7157
         target_lat = result.get("lat")
         target_lon = result.get("lon")
 
+        response: dict = {
+            "location_name": result.get("location_name", ""),
+            "reasoning": result.get("reasoning", ""),
+            "dow": result.get("dow"),    # int 0-6 or None
+            "hour": result.get("hour"),  # int 0-23 or None
+        }
+
         if target_lat and target_lon:
-            # Find nearest area centroid by actual distance
             nearest = min(
                 (a for a in AREAS if a.get("lat") and a.get("lon")),
                 key=lambda a: haversine(target_lat, target_lon, a["lat"], a["lon"])
             )
-            return {
-                "area": nearest,
-                "location_name": result.get("location_name", ""),
-                "reasoning": result.get("reasoning", ""),
-            }
+            response["area"] = nearest
+            return response
     except Exception as e:
         print(f"resolve-location error: {e} | raw: {message.content[0].text if message else 'no response'}")
 
-    return {"area": AREAS[0], "location_name": "", "reasoning": "Could not parse location, using default area"}
+    return {"area": AREAS[0], "location_name": "", "reasoning": "Could not parse location, using default area", "dow": None, "hour": None}
 
 
 @app.get("/health")
@@ -268,7 +292,12 @@ async def find_parking(req: ParkingQuery):
     dow = req.dow if req.dow is not None else now.weekday()
     hour = req.hour if req.hour is not None else now.hour
 
-    nearby = find_nearby_meters(req.lat, req.lon, req.radius_m, dow=dow, hour=hour)
+    # Use pre-fetched meters from frontend if provided (already have citation data);
+    # otherwise fall back to a fresh DB lookup.
+    if req.meters:
+        nearby = sanitize(req.meters)
+    else:
+        nearby = find_nearby_meters(req.lat, req.lon, req.radius_m, dow=dow, hour=hour)
 
     if not nearby:
         raise HTTPException(status_code=404, detail="No meters found in that area")
@@ -295,9 +324,10 @@ async def find_parking(req: ParkingQuery):
 @app.get("/meter/{meter_id}/curve")
 def meter_curve(meter_id: str):
     """Return full availability curve for a meter (for sparkline chart)."""
-    scores = AVAILABILITY.get(meter_id, [])
-    if not scores:
+    meter_data = AVAILABILITY.get(meter_id, {})
+    if not meter_data:
         raise HTTPException(status_code=404, detail="No data for this meter")
+    scores = meter_data.get("scores", []) if isinstance(meter_data, dict) else meter_data
     return {"meter_id": meter_id, "curve": scores}
 
 
